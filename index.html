@@ -175,7 +175,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 19h59';
+    const APP_BUILD = '04/03/2026 - 20h13';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -2132,14 +2132,6 @@ out tags center 120;`;
       }
 
       useEffect(() => {
-        if (!position) return;
-        const timer = window.setTimeout(() => {
-          runSearch();
-        }, 600);
-        return () => window.clearTimeout(timer);
-      }, [position?.lat, position?.lon, radiusKm]);
-
-      useEffect(() => {
         return () => {
           if (searchAbortRef.current) searchAbortRef.current.abort();
         };
@@ -2407,7 +2399,7 @@ out tags center 120;`;
                 disabled={loading}
                 className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-sky-400 text-white hover:bg-sky-500 disabled:opacity-50 text-sm font-medium"
               >
-                <IconRefresh /> {loading ? 'Recherche…' : 'Nouvelle recherche'}
+                <IconRefresh /> {loading ? 'Recherche…' : 'Rechercher'}
               </button>
             </div>
           </div>
@@ -2426,7 +2418,11 @@ out tags center 120;`;
                 {isFallbackMode ? 'Zones météo (aucun point ensoleillé)' : `Zones météo près de ${locationTitle}`}
               </h2>
               <p className="text-sm text-white/90 mt-0.5">
-                {loading && position ? 'Recherche en cours…' : cities.length === 0 && !error ? 'Aucun lieu' : (displayedCities.length !== cities.length ? `${destinationLabel} — ${displayedCities.length} affichés` : destinationLabel)}
+                {loading && position
+                  ? 'Recherche en cours…'
+                  : cities.length === 0 && !error
+                    ? 'Appuyez sur Rechercher pour lancer une recherche.'
+                    : (displayedCities.length !== cities.length ? `${destinationLabel} — ${displayedCities.length} affichés` : destinationLabel)}
                 {isFallbackMode && cities.length > 0 && ' — triés du moins nuageux au plus proche'}
               </p>
             </div>
