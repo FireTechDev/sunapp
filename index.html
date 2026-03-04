@@ -175,7 +175,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 18h49';
+    const APP_BUILD = '04/03/2026 - 18h59';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -401,7 +401,10 @@
 
     const MAX_GEO_IMAGE_DISTANCE_M = 10000;
     const MAX_CARD_PHOTOS = 3;
+    const MAX_CARD_POIS = 3;
+    const POI_SEARCH_RADIUS_M = 5000;
     const CARD_PHOTO_CACHE = new Map();
+    const CARD_POI_CACHE = new Map();
     const NON_SCENIC_TITLE_HINTS = /\b(map|carte|plan|logo|flag|drapeau|blason|coat[_ -]?of[_ -]?arms|symbol|diagram|locator|location map|svg|liste de|chronologie|histoire de)\b/i;
     const PERSON_DESCRIPTION_HINTS = /\b(acteur|actrice|chanteur|chanteuse|joueur|joueuse|footballeur|rugbyman|cycliste|peintre|écrivain|politique|député|maire|avocat|journaliste|personnalité|biographie|né en|née en|mort en|morte en|human)\b/i;
     const PLACE_DESCRIPTION_HINTS = /\b(commune|village|hameau|quartier|eglise|chateau|mont|lac|riviere|foret|parc|plage|vallee|reserve|gorges|site naturel|monument|abbaye|cathedrale|basilique|musee|pont|canal|place)\b/i;
@@ -409,6 +412,69 @@
 
     function getCardPhotoCacheKey(lat, lon) {
       return `${Number(lat).toFixed(4)},${Number(lon).toFixed(4)}`;
+    }
+
+    function getCardPoiCacheKey(lat, lon) {
+      return `poi:${Number(lat).toFixed(4)},${Number(lon).toFixed(4)}`;
+    }
+
+    function getPoiCategory(tags = {}) {
+      const tourism = String(tags.tourism || '');
+      if (tourism === 'viewpoint') return { key: 'viewpoint', label: 'Point de vue', emoji: '🌄' };
+      if (tourism === 'museum') return { key: 'museum', label: 'Musée', emoji: '🏛️' };
+      if (tourism === 'attraction') return { key: 'attraction', label: 'Site', emoji: '📍' };
+      if (['theme_park', 'zoo', 'aquarium'].includes(tourism)) return { key: 'family', label: 'Sortie', emoji: '🎡' };
+      const leisure = String(tags.leisure || '');
+      if (['park', 'garden', 'nature_reserve'].includes(leisure)) return { key: 'nature', label: 'Nature', emoji: '🌿' };
+      if (leisure === 'picnic_site') return { key: 'picnic', label: 'Pause', emoji: '🧺' };
+      if (tags.historic) return { key: 'historic', label: 'Patrimoine', emoji: '🏰' };
+      const natural = String(tags.natural || '');
+      if (['beach', 'peak', 'water', 'wood', 'cliff'].includes(natural)) return { key: 'nature', label: 'Nature', emoji: '🌿' };
+      return { key: 'spot', label: 'À découvrir', emoji: '📌' };
+    }
+
+    function scorePoiForCity(poi, city) {
+      const sunny = SUN_CODES.includes(city?.weather_code ?? -1);
+      const wind = Number(city?.wind_speed ?? 0);
+      let score = 100 - Math.min(45, (poi.distanceM ?? 0) / 130);
+      if (sunny && wind <= 25) {
+        if (['viewpoint', 'nature', 'picnic'].includes(poi.categoryKey)) score += 26;
+        if (['museum', 'historic'].includes(poi.categoryKey)) score += 8;
+      } else {
+        if (['museum', 'historic', 'attraction'].includes(poi.categoryKey)) score += 20;
+        if (['viewpoint', 'nature', 'picnic'].includes(poi.categoryKey)) score -= 6;
+      }
+      return score;
+    }
+
+    function selectPoiIdeas(rawPois, city, maxItems = MAX_CARD_POIS) {
+      if (!Array.isArray(rawPois) || rawPois.length === 0) return [];
+      const ranked = rawPois
+        .map((poi) => ({ ...poi, _score: scorePoiForCity(poi, city) }))
+        .sort((a, b) => (b._score - a._score) || ((a.distanceM ?? Infinity) - (b.distanceM ?? Infinity)));
+      const picked = [];
+      const usedCategories = new Set();
+      const usedNames = new Set();
+      for (const poi of ranked) {
+        const nameKey = normalizeText(poi.name || '');
+        if (!nameKey || usedNames.has(nameKey)) continue;
+        if (picked.length >= maxItems) break;
+        if (!usedCategories.has(poi.categoryKey)) {
+          picked.push(poi);
+          usedCategories.add(poi.categoryKey);
+          usedNames.add(nameKey);
+        }
+      }
+      if (picked.length < maxItems) {
+        for (const poi of ranked) {
+          const nameKey = normalizeText(poi.name || '');
+          if (!nameKey || usedNames.has(nameKey)) continue;
+          picked.push(poi);
+          usedNames.add(nameKey);
+          if (picked.length >= maxItems) break;
+        }
+      }
+      return picked.slice(0, maxItems);
     }
 
     function normalizeText(input) {
@@ -435,6 +501,52 @@
       const res = await fetch(url, { signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
+    }
+
+    async function fetchZonePoiIdeas(lat, lon, signal) {
+      const query = `[out:json][timeout:18];
+(
+  nwr(around:${POI_SEARCH_RADIUS_M},${lat},${lon})["tourism"~"attraction|viewpoint|museum|theme_park|zoo|aquarium"];
+  nwr(around:${POI_SEARCH_RADIUS_M},${lat},${lon})["leisure"~"park|garden|nature_reserve|picnic_site"];
+  nwr(around:${POI_SEARCH_RADIUS_M},${lat},${lon})["historic"];
+  nwr(around:${POI_SEARCH_RADIUS_M},${lat},${lon})["natural"~"beach|peak|water|wood|cliff"];
+);
+out tags center 120;`;
+      const res = await fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+        body: new URLSearchParams({ data: query }),
+        signal,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const payload = await res.json();
+      const elements = Array.isArray(payload?.elements) ? payload.elements : [];
+      const seen = new Set();
+      const pois = [];
+      for (const el of elements) {
+        const tags = el?.tags || {};
+        const name = String(tags?.name || '').trim();
+        if (!name || name.length < 3) continue;
+        const poiLat = Number(el?.lat ?? el?.center?.lat);
+        const poiLon = Number(el?.lon ?? el?.center?.lon);
+        if (!Number.isFinite(poiLat) || !Number.isFinite(poiLon)) continue;
+        const distanceM = Math.round(haversine(lat, lon, poiLat, poiLon) * 1000);
+        if (!Number.isFinite(distanceM) || distanceM > POI_SEARCH_RADIUS_M) continue;
+        const category = getPoiCategory(tags);
+        const dedupeKey = `${normalizeText(name)}|${category.key}`;
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+        pois.push({
+          name,
+          lat: Number(poiLat.toFixed(5)),
+          lon: Number(poiLon.toFixed(5)),
+          distanceM,
+          categoryKey: category.key,
+          categoryLabel: category.label,
+          emoji: category.emoji,
+        });
+      }
+      return pois.sort((a, b) => (a.distanceM ?? Infinity) - (b.distanceM ?? Infinity)).slice(0, 40);
     }
 
     async function fetchZonePhotoSlides(lat, lon, placeName, signal) {
@@ -619,8 +731,32 @@
     }
 
     function CityCard({ city, userLat, userLon, onShowOnMap, isRecommended, rank, cardId }) {
+      const cardRef = useRef(null);
       const [photoSlides, setPhotoSlides] = useState([]);
       const [photoIndex, setPhotoIndex] = useState(0);
+      const [poiRaw, setPoiRaw] = useState([]);
+      const [poiLoading, setPoiLoading] = useState(false);
+      const [shouldLoadPoi, setShouldLoadPoi] = useState(false);
+
+      useEffect(() => {
+        if (shouldLoadPoi) return;
+        const node = cardRef.current;
+        if (!node || typeof IntersectionObserver === 'undefined') {
+          setShouldLoadPoi(true);
+          return;
+        }
+        const observer = new IntersectionObserver(
+          (entries) => {
+            if (entries.some((entry) => entry.isIntersecting)) {
+              setShouldLoadPoi(true);
+              observer.disconnect();
+            }
+          },
+          { rootMargin: '280px 0px' }
+        );
+        observer.observe(node);
+        return () => observer.disconnect();
+      }, [shouldLoadPoi]);
 
       useEffect(() => {
         let cancelled = false;
@@ -654,6 +790,40 @@
         };
       }, [city.lat, city.lon]);
 
+      useEffect(() => {
+        if (!shouldLoadPoi) return;
+        let cancelled = false;
+        const abortController = new AbortController();
+        const cacheKey = getCardPoiCacheKey(city.lat, city.lon);
+        const cached = CARD_POI_CACHE.get(cacheKey);
+        if (cached) {
+          setPoiRaw(cached);
+          setPoiLoading(false);
+          return () => {
+            cancelled = true;
+            abortController.abort();
+          };
+        }
+        setPoiLoading(true);
+        (async () => {
+          try {
+            const pois = await fetchZonePoiIdeas(city.lat, city.lon, abortController.signal);
+            if (cancelled) return;
+            CARD_POI_CACHE.set(cacheKey, pois);
+            setPoiRaw(pois);
+          } catch (err) {
+            if (cancelled || err?.name === 'AbortError') return;
+            setPoiRaw([]);
+          } finally {
+            if (!cancelled) setPoiLoading(false);
+          }
+        })();
+        return () => {
+          cancelled = true;
+          abortController.abort();
+        };
+      }, [shouldLoadPoi, city.lat, city.lon]);
+
       const dist = haversine(userLat, userLon, city.lat, city.lon);
       const driveMin = Math.round((dist / AVG_DRIVE_SPEED_KMH) * 60);
       const driveLabel = driveMin >= 60 ? `${Math.floor(driveMin / 60)} h` + (driveMin % 60 ? ` ${driveMin % 60} min` : '') : `${driveMin} min`;
@@ -669,6 +839,10 @@
       const cardTitle = hasGenericName ? 'Spot ensoleille' : city.name;
       const activeSlide = photoSlides[photoIndex] || null;
       const showCarouselControls = photoSlides.length > 1;
+      const poiIdeas = useMemo(
+        () => selectPoiIdeas(poiRaw, city, MAX_CARD_POIS),
+        [poiRaw, city.weather_code, city.wind_speed]
+      );
 
       const previousPhoto = (e) => {
         e.stopPropagation();
@@ -690,6 +864,7 @@
       return (
         <div
           id={cardId}
+          ref={cardRef}
           className="city-card bg-white rounded-2xl shadow-lg overflow-hidden cursor-pointer border border-slate-100 relative"
           onClick={() => onShowOnMap(city)}
         >
@@ -842,13 +1017,39 @@
             <div className="mt-4 pt-3 border-t border-slate-100">
               <div className="flex items-center gap-2 text-sky-600 font-medium text-sm mb-2">
                 <IconCamera className="w-4 h-4" />
-                À voir sur place
+                Idées à proximité
               </div>
-              <ul className="space-y-1 text-slate-600 text-sm">
-                <li className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0" />Centre historique et monuments</li>
-                <li className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0" />Parcs et espaces verts</li>
-                <li className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0" />Points d'intérêt locaux</li>
-              </ul>
+              {poiLoading ? (
+                <p className="text-xs text-slate-500">Recherche de lieux proches...</p>
+              ) : poiIdeas.length > 0 ? (
+                <ul className="space-y-1.5 text-slate-600 text-sm">
+                  {poiIdeas.map((poi, idx) => (
+                    <li key={`${poi.name}-${idx}`} className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium text-slate-700" title={poi.name}>
+                          {poi.emoji} {poi.name}
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          {poi.categoryLabel} • {(poi.distanceM / 1000).toFixed(1)} km
+                        </p>
+                      </div>
+                      <a
+                        href={`https://www.waze.com/ul?ll=${poi.lat},${poi.lon}&navigate=yes`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[11px] px-2 py-1 rounded-md bg-sky-50 text-sky-700 font-medium hover:bg-sky-100 shrink-0"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        Y aller
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-slate-500">
+                  Aucun lieu notable trouvé dans un rayon de 5 km.
+                </p>
+              )}
             </div>
 
             {/* Explication dynamique si le WeatherScore est impacté */}
