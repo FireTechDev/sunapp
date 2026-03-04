@@ -187,7 +187,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 22h02';
+    const APP_BUILD = '04/03/2026 - 22h10';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -455,11 +455,12 @@
       return { ...config, score: raw };
     }
 
-    // Rayon d'action : temps de trajet → rayon approximatif (vitesse moyenne 70 km/h, routes mixtes)
-    const TRAVEL_TIME_PRESETS_MIN = [15, 30, 45, 60, 90, 120, 150, 180];
-    const AVG_DRIVE_SPEED_KMH = 70;
-    function travelTimeToRadiusKm(minutes) {
-      return Math.round((minutes / 60) * AVG_DRIVE_SPEED_KMH);
+    // Distance max (curseur) + durée estimée (plafond 300 km ≈ 3 h 30)
+    const TRAVEL_DISTANCE_PRESETS_KM = [20, 40, 60, 80, 110, 140, 170, 210, 250, 300];
+    const AVG_DRIVE_SPEED_KMH = 85.7;
+    function distanceKmToTravelMinutes(km) {
+      const distance = Math.max(0, Number(km) || 0);
+      return Math.round((distance / AVG_DRIVE_SPEED_KMH) * 60);
     }
     function formatTravelTime(minutes) {
       if (minutes >= 60) return `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
@@ -2011,8 +2012,9 @@ out tags center 120;`;
       const searchSeqRef = useRef(0);
       const searchAbortRef = useRef(null);
 
-      const travelTimeMin = TRAVEL_TIME_PRESETS_MIN[Math.min(travelTimeIndex, TRAVEL_TIME_PRESETS_MIN.length - 1)];
-      const radiusKm = travelTimeToRadiusKm(travelTimeMin);
+      const travelDistanceKm = TRAVEL_DISTANCE_PRESETS_KM[Math.min(travelTimeIndex, TRAVEL_DISTANCE_PRESETS_KM.length - 1)];
+      const travelTimeEstimateMin = distanceKmToTravelMinutes(travelDistanceKm);
+      const radiusKm = travelDistanceKm;
       const scopeTabs = TIME_SCOPE_OPTIONS.map((option) => ({
         ...option,
         ...(timeScopeContext?.scopes?.[option.key] || {}),
@@ -3065,26 +3067,26 @@ out tags center 120;`;
             </p>
           </div>
 
-          {/* Carte + rayon d'action (en dessous) */}
+          {/* Carte + distance maximum (en dessous) */}
           <div className="mb-4">
             <div className="bg-white rounded-2xl shadow-md border border-slate-100 overflow-hidden min-h-[280px] h-[340px]" ref={mapRef} id="map" />
             <div className="mt-3 bg-white rounded-2xl shadow-md border border-slate-100 p-4">
-              <label className="block text-sm font-medium text-slate-700 mb-2">Rayon d'action : ~{formatTravelTime(travelTimeMin)} (≈ {radiusKm} km)</label>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Distance maximum : {radiusKm} km ({formatTravelTime(travelTimeEstimateMin)} estimé)</label>
               <input
                 type="range"
                 min="0"
-                max={TRAVEL_TIME_PRESETS_MIN.length - 1}
+                max={TRAVEL_DISTANCE_PRESETS_KM.length - 1}
                 step="1"
                 value={travelTimeIndex}
                 onChange={(e) => setTravelTimeIndex(Number(e.target.value))}
                 className="w-full h-2 bg-slate-200 rounded-full appearance-none cursor-pointer"
-                style={{ background: `linear-gradient(to right, #36A7EB 0%, #36A7EB ${(travelTimeIndex / (TRAVEL_TIME_PRESETS_MIN.length - 1)) * 100}%, #e2e8f0 ${(travelTimeIndex / (TRAVEL_TIME_PRESETS_MIN.length - 1)) * 100}%, #e2e8f0 100%)` }}
+                style={{ background: `linear-gradient(to right, #36A7EB 0%, #36A7EB ${(travelTimeIndex / (TRAVEL_DISTANCE_PRESETS_KM.length - 1)) * 100}%, #e2e8f0 ${(travelTimeIndex / (TRAVEL_DISTANCE_PRESETS_KM.length - 1)) * 100}%, #e2e8f0 100%)` }}
               />
               <div className="flex justify-between text-xs text-slate-500 mt-1">
-                <span>15 min</span>
-                <span>3 h</span>
+                <span>{TRAVEL_DISTANCE_PRESETS_KM[0]} km</span>
+                <span>{TRAVEL_DISTANCE_PRESETS_KM[TRAVEL_DISTANCE_PRESETS_KM.length - 1]} km</span>
               </div>
-              <p className="text-xs text-slate-400 mt-0.5">Estimation à vol d'oiseau (≈ 70 km/h)</p>
+              <p className="text-xs text-slate-400 mt-0.5">Durée de trajet estimée en conditions fluides.</p>
             </div>
           </div>
 
