@@ -127,7 +127,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 16h59';
+    const APP_BUILD = '04/03/2026 - 17h00';
 
     // ---------- Utilitaires ----------
     function haversine(lat1, lon1, lat2, lon2) {
@@ -883,6 +883,12 @@
           const score5 = getWeatherScore(city).score;
           const radiusPx = Math.max(3, 2 + score5 * 2.6);
           const fill = score5 >= 5 ? '#f97316' : score5 >= 4 ? '#fb923c' : score5 >= 3 ? '#f59e0b' : score5 >= 2 ? '#facc15' : '#9ca3af';
+          const roundedTemp = city.temp != null ? Math.round(city.temp) : null;
+          const roundedFeels = city.feelsLike != null ? Math.round(city.feelsLike) : null;
+          let tempLabel = '';
+          if (roundedTemp != null && roundedFeels != null) tempLabel = ` • ${roundedTemp}° (ressenti ${roundedFeels}°)`;
+          else if (roundedTemp != null) tempLabel = ` • ${roundedTemp}°`;
+          else if (roundedFeels != null) tempLabel = ` • ressenti ${roundedFeels}°`;
           const m = L.circleMarker([city.lat, city.lon], {
             radius: radiusPx,
             color: fill,
@@ -891,7 +897,7 @@
             weight: 1,
           })
             .addTo(mapInstanceRef.current)
-            .bindPopup(`${city.name} — ${score5}/5${city.temp != null ? ' • ' + Math.round(city.temp) + '°' : ''}${city.feelsLike != null && Math.round(city.feelsLike) !== Math.round(city.temp) ? ' (ressenti ' + Math.round(city.feelsLike) + '°)' : ''}`);
+            .bindPopup(`${city.name} — ${score5}/5${tempLabel}`);
           markersRef.current.push(m);
         });
       }, [displayedCities]);
