@@ -21,6 +21,7 @@ const API_HOSTS = new Set([
   'api.open-meteo.com',
   'api-adresse.data.gouv.fr',
   'fr.wikipedia.org',
+  'nominatim.openstreetmap.org',
 ]);
 
 function isSupportedProtocol(url) {
@@ -164,8 +165,9 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (API_HOSTS.has(url.hostname)) {
+    const apiTimeoutMs = url.hostname === 'api.open-meteo.com' ? 22000 : 15000;
     event.respondWith(
-      networkFirst(request, API_CACHE).catch(() => new Response('', { status: 504, statusText: 'Gateway Timeout' }))
+      networkFirst(request, API_CACHE, apiTimeoutMs).catch(() => new Response('', { status: 504, statusText: 'Gateway Timeout' }))
     );
     return;
   }

@@ -175,7 +175,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 19h18';
+    const APP_BUILD = '04/03/2026 - 19h31';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -1573,15 +1573,39 @@ out tags center 120;`;
           return dirs[Math.round(brng / 45) % 8];
         };
         const fallbackLabel = (p, idx) => {
-          if (!position) return `Spot meteo ${idx + 1}`;
+          if (!position) return `Zone meteo ${idx + 1}`;
           const dist = Math.max(1, Math.round(haversine(position.lat, position.lon, p.lat, p.lon)));
           const dir = directionLabel(position.lat, position.lon, p.lat, p.lon);
-          return `Spot ${dir} (${dist} km)`;
+          return `Zone ${dir} (${dist} km)`;
         };
         const sanitizePlaceLabel = (value) => String(value || '').split(',')[0].replace(/\s+/g, ' ').trim();
         const isGenericSpotLabel = (value) => {
           const label = sanitizePlaceLabel(value);
-          return !label || /^spot\b/i.test(label) || /^zone\s+\d+\b/i.test(label);
+          return !label || /^spot\b/i.test(label) || /^zone\b/i.test(label);
+        };
+        const extractLocalityFromAdresseLabel = (value) => {
+          const label = String(value || '').replace(/\s+/g, ' ').trim();
+          if (!label) return '';
+          const commaParts = label.split(',').map((part) => sanitizePlaceLabel(part)).filter(Boolean);
+          if (commaParts.length >= 2) {
+            const afterComma = commaParts[1].replace(/^\d{5}\s+/, '').trim();
+            if (afterComma) return sanitizePlaceLabel(afterComma);
+          }
+          const postalMatch = label.match(/\b\d{5}\s+([A-Za-zÀ-ÖØ-öø-ÿ' -]+)$/);
+          if (postalMatch?.[1]) return sanitizePlaceLabel(postalMatch[1]);
+          return '';
+        };
+        const extractLocalityFromAdresseProps = (props = {}) => {
+          const city = sanitizePlaceLabel(props.city || '');
+          if (city) return city;
+          const type = String(props.type || '').toLowerCase();
+          if (['municipality', 'city', 'town', 'village', 'hamlet', 'locality'].includes(type)) {
+            const name = sanitizePlaceLabel(props.name || '');
+            if (name) return name;
+          }
+          const fromLabel = extractLocalityFromAdresseLabel(props.label || '');
+          if (fromLabel) return fromLabel;
+          return '';
         };
         const lookupNearestMunicipalityLabel = async (lat, lon) => {
           const municipalityUrl = `https://api-adresse.data.gouv.fr/reverse/?lon=${lon}&lat=${lat}&type=municipality&limit=1`;
@@ -1595,19 +1619,45 @@ out tags center 120;`;
             return '';
           }
         };
-        const lookupOne = async (p, idx) => {
-          const url = `https://api-adresse.data.gouv.fr/reverse/?lon=${p.lon}&lat=${p.lat}`;
+        const lookupNominatimLocality = async (lat, lon) => {
+          const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=10&addressdetails=1&accept-language=fr`;
           try {
-            let feat = null;
+            const res = await fetch(url, {
+              signal,
+              headers: { Accept: 'application/json' },
+            });
+            if (!res.ok) return '';
+            const data = await res.json();
+            const address = data?.address || {};
+            return sanitizePlaceLabel(
+              address.city
+              || address.town
+              || address.village
+              || address.hamlet
+              || address.municipality
+              || address.suburb
+              || address.county
+              || address.state_district
+              || ''
+            );
+          } catch (_) {
+            return '';
+          }
+        };
+        const lookupOne = async (p, idx) => {
+          let nextLat = p.lat;
+          let nextLon = p.lon;
+          let firstFeature = null;
+          let features = [];
+          try {
+            const url = `https://api-adresse.data.gouv.fr/reverse/?lon=${p.lon}&lat=${p.lat}&limit=5`;
             const res = await fetch(url, { signal });
             if (res.ok) {
               const data = await res.json();
-              feat = data?.features?.[0] || null;
+              features = Array.isArray(data?.features) ? data.features : [];
+              firstFeature = features[0] || null;
             }
-            const props = feat?.properties || {};
-            const coords = feat?.geometry?.coordinates;
-            let nextLat = p.lat;
-            let nextLon = p.lon;
+            const coords = firstFeature?.geometry?.coordinates;
             if (Array.isArray(coords) && coords.length >= 2) {
               const snappedLon = Number(coords[0]);
               const snappedLat = Number(coords[1]);
@@ -1619,28 +1669,58 @@ out tags center 120;`;
                 }
               }
             }
-            let label = sanitizePlaceLabel(props.city || props.name || props.label || '');
-            if (isGenericSpotLabel(label)) {
-              const nearestMunicipality = await lookupNearestMunicipalityLabel(nextLat, nextLon);
-              if (nearestMunicipality) label = nearestMunicipality;
+          } catch (_) {}
+
+          let label = '';
+          for (const feat of features) {
+            const props = feat?.properties || {};
+            const candidate = extractLocalityFromAdresseProps(props);
+            if (!isGenericSpotLabel(candidate)) {
+              label = candidate;
+              break;
             }
-            if (!label) label = fallbackLabel(p, idx);
-            return {
-              ...p,
-              lat: Number(nextLat.toFixed(5)),
-              lon: Number(nextLon.toFixed(5)),
-              _dist: position ? haversine(position.lat, position.lon, nextLat, nextLon) : p._dist,
-              name: label,
-              type: props.type || 'zone',
-            };
-          } catch (e) {
-            return null;
           }
+          if (isGenericSpotLabel(label)) {
+            const nearestMunicipality = await lookupNearestMunicipalityLabel(nextLat, nextLon);
+            if (nearestMunicipality) label = nearestMunicipality;
+          }
+          if (isGenericSpotLabel(label)) {
+            const nominatimLocality = await lookupNominatimLocality(nextLat, nextLon);
+            if (nominatimLocality) label = nominatimLocality;
+          }
+          if (isGenericSpotLabel(label)) label = fallbackLabel(p, idx);
+
+          return {
+            ...p,
+            lat: Number(nextLat.toFixed(5)),
+            lon: Number(nextLon.toFixed(5)),
+            _dist: position ? haversine(position.lat, position.lon, nextLat, nextLon) : p._dist,
+            name: label,
+            type: firstFeature?.properties?.type || 'zone',
+          };
         };
         const out = [];
         for (let i = 0; i < points.length; i++) {
           const item = await lookupOne(points[i], i);
-          out.push(item || { ...points[i], name: fallbackLabel(points[i], i), type: 'zone' });
+          out.push(item);
+        }
+        const named = out.filter((p) => !isGenericSpotLabel(p?.name));
+        if (named.length > 0) {
+          for (const item of out) {
+            if (!item || !isGenericSpotLabel(item.name)) continue;
+            let nearest = null;
+            let nearestDist = Infinity;
+            for (const candidate of named) {
+              const d = haversine(item.lat, item.lon, candidate.lat, candidate.lon);
+              if (d < nearestDist) {
+                nearestDist = d;
+                nearest = candidate;
+              }
+            }
+            if (nearest && nearestDist <= 30) {
+              item.name = nearest.name;
+            }
+          }
         }
         return out;
       }
@@ -1871,6 +1951,8 @@ out tags center 120;`;
         try {
           const baseUrl = 'https://api.open-meteo.com/v1/forecast';
           const params = 'current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,cloud_cover&hourly=temperature_2m,weather_code,wind_speed_10m&forecast_days=1&timezone=auto';
+          const METEO_BATCH_SIZE = 48;
+          const METEO_MIN_BATCH_SIZE = 12;
           const fetchMeteoBatch = async (pts) => {
             const latStr = pts.map((p) => p.lat).join(',');
             const lonStr = pts.map((p) => p.lon).join(',');
@@ -1879,19 +1961,30 @@ out tags center 120;`;
             if (!meteoRes.ok) throw new Error('Service météo indisponible. Réessayez.');
             return meteoRes.json();
           };
+          const fetchAndScoreChunk = async (pts) => {
+            if (!pts || pts.length === 0) return [];
+            try {
+              const data = await fetchMeteoBatch(pts);
+              return mergeMeteo(pts, data);
+            } catch (err) {
+              if (err?.name === 'AbortError') throw err;
+              if (pts.length <= METEO_MIN_BATCH_SIZE) return [];
+              const mid = Math.ceil(pts.length / 2);
+              const left = await fetchAndScoreChunk(pts.slice(0, mid));
+              const right = await fetchAndScoreChunk(pts.slice(mid));
+              return [...left, ...right];
+            }
+          };
 
-          // Tentative en une requête ; fallback chunké si la réponse est partielle/incomplète
-          let meteoData = await fetchMeteoBatch(grid);
-          let scored = mergeMeteo(grid, meteoData);
-          if (scored.length < Math.max(20, Math.floor(grid.length * 0.6))) {
-            const chunkSize = 80;
-            const chunks = [];
-            for (let i = 0; i < grid.length; i += chunkSize) chunks.push(grid.slice(i, i + chunkSize));
-            const partials = await Promise.all(chunks.map(async (chunk, chunkIdx) => {
-              const data = await fetchMeteoBatch(chunk);
-              return mergeMeteo(chunk, data).map((p, j) => ({ ...p, id: `grid-${chunkIdx}-${j}` }));
-            }));
-            scored = partials.flat();
+          let scored = [];
+          let meteoRowId = 0;
+          for (let i = 0; i < grid.length; i += METEO_BATCH_SIZE) {
+            if (!isCurrentSearch()) return;
+            const chunk = grid.slice(i, i + METEO_BATCH_SIZE);
+            const partialScored = await fetchAndScoreChunk(chunk);
+            for (const row of partialScored) {
+              scored.push({ ...row, id: `grid-${meteoRowId++}` });
+            }
           }
           if (scored.length === 0) throw new Error('Aucune donnée météo exploitable dans le rayon.');
           const byScoreThenDist = (a, b) => {
