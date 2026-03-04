@@ -167,6 +167,18 @@
       outline-offset: 2px;
       transition: outline-color 0.2s ease;
     }
+    @media (max-width: 640px) {
+      .city-card .text-xs,
+      .city-card .text-\[10px\],
+      .city-card .text-\[11px\] {
+        font-size: 12px !important;
+        line-height: 1.35 !important;
+      }
+      .city-card .text-sm {
+        font-size: 14px !important;
+        line-height: 1.4 !important;
+      }
+    }
   </style>
 </head>
 <body class="min-h-screen bg-sky-50 text-slate-800">
@@ -175,7 +187,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 20h41';
+    const APP_BUILD = '04/03/2026 - 20h47';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -1006,6 +1018,29 @@ out tags center 120;`;
       if ([95, 96, 99].includes(code)) return '⛈️';
       if ([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return '🌧️';
       return '⛅';
+    }
+
+    function precipitationRiskFloorFromCode(code) {
+      const c = Number(code);
+      if (!Number.isFinite(c)) return 0;
+      if ([95, 96, 99].includes(c)) return 90;
+      if ([80, 81, 82, 65, 67].includes(c)) return 75;
+      if ([61, 63, 66].includes(c)) return 60;
+      if ([51, 53, 55, 56, 57].includes(c)) return 45;
+      if ([71, 73, 75, 77, 85, 86].includes(c)) return 55;
+      if (c === 3) return 15;
+      if ([1, 2, 45, 48].includes(c)) return 8;
+      return 0;
+    }
+
+    function precipitationRiskFromAmount(mm) {
+      const m = Number(mm);
+      if (!Number.isFinite(m) || m <= 0) return 0;
+      if (m >= 5) return 90;
+      if (m >= 2) return 75;
+      if (m >= 0.8) return 55;
+      if (m >= 0.2) return 35;
+      return 20;
     }
 
     // ---------- TrendTimeline : aperçu horaire lisible sur 5 créneaux ----------
@@ -2141,6 +2176,7 @@ out tags center 120;`;
             const winds = hourly.wind_speed_10m || [];
             const codes = hourly.weather_code || [];
             const precipProbabilities = hourly.precipitation_probability || [];
+            const precipAmounts = hourly.precipitation || [];
             const nowMs = now.getTime();
             let trendSlots = [];
             const pushTrendSlot = (label, t, w, code) => {
@@ -2159,35 +2195,64 @@ out tags center 120;`;
 
             const currentScore = pushTrendSlot('Maintenant', temp, wind, cur.weather_code);
             let precipitationRisk = null;
-            if (Array.isArray(times) && Array.isArray(precipProbabilities) && times.length > 0 && precipProbabilities.length > 0) {
-              const maxIndex = Math.min(times.length, precipProbabilities.length);
-              const sixHoursMs = 6 * 60 * 60 * 1000;
+            if (Array.isArray(times) && times.length > 0) {
+              const maxIndex = times.length;
+              const twelveHoursMs = 12 * 60 * 60 * 1000;
               const pastToleranceMs = 30 * 60 * 1000;
-              let windowMax = null;
+              let windowMaxProb = null;
+              let windowMaxAmount = 0;
+              let windowCodeRisk = precipitationRiskFloorFromCode(cur.weather_code);
               let nearestIndex = -1;
               let nearestDiff = Infinity;
               for (let tIdx = 0; tIdx < maxIndex; tIdx++) {
                 const prob = Number(precipProbabilities[tIdx]);
-                if (!Number.isFinite(prob)) continue;
                 const ts = new Date(times[tIdx]).getTime();
                 if (!Number.isFinite(ts)) continue;
                 const delta = ts - nowMs;
-                if (delta >= -pastToleranceMs && delta <= sixHoursMs) {
-                  windowMax = windowMax == null ? prob : Math.max(windowMax, prob);
+                if (delta >= -pastToleranceMs && delta <= twelveHoursMs) {
+                  if (Number.isFinite(prob)) {
+                    windowMaxProb = windowMaxProb == null ? prob : Math.max(windowMaxProb, prob);
+                  }
+                  const amount = Number(precipAmounts[tIdx]);
+                  if (Number.isFinite(amount)) {
+                    windowMaxAmount = Math.max(windowMaxAmount, amount);
+                  }
+                  const codeRisk = precipitationRiskFloorFromCode(codes[tIdx]);
+                  if (codeRisk > windowCodeRisk) {
+                    windowCodeRisk = codeRisk;
+                  }
                 }
                 const absDiff = Math.abs(delta);
-                if (absDiff < nearestDiff) {
+                const hasSignal = Number.isFinite(prob) || Number.isFinite(amount);
+                if (hasSignal && absDiff < nearestDiff) {
                   nearestDiff = absDiff;
                   nearestIndex = tIdx;
                 }
               }
-              if (Number.isFinite(windowMax)) {
-                precipitationRisk = Math.max(0, Math.min(100, Math.round(windowMax)));
-              } else if (nearestIndex >= 0) {
+              let derivedRisk = null;
+              if (Number.isFinite(windowMaxProb)) {
+                derivedRisk = Number(windowMaxProb);
+              }
+              if (windowMaxAmount > 0) {
+                const mmRisk = precipitationRiskFromAmount(windowMaxAmount);
+                derivedRisk = derivedRisk == null ? mmRisk : Math.max(derivedRisk, mmRisk);
+              }
+              if (windowCodeRisk > 0) {
+                derivedRisk = derivedRisk == null ? windowCodeRisk : Math.max(derivedRisk, windowCodeRisk);
+              }
+              if (derivedRisk == null && nearestIndex >= 0) {
                 const nearestProb = Number(precipProbabilities[nearestIndex]);
                 if (Number.isFinite(nearestProb)) {
-                  precipitationRisk = Math.max(0, Math.min(100, Math.round(nearestProb)));
+                  derivedRisk = nearestProb;
+                } else {
+                  const nearestAmount = Number(precipAmounts[nearestIndex]);
+                  if (Number.isFinite(nearestAmount)) {
+                    derivedRisk = precipitationRiskFromAmount(nearestAmount);
+                  }
                 }
+              }
+              if (derivedRisk != null && Number.isFinite(derivedRisk)) {
+                precipitationRisk = Math.max(0, Math.min(100, Math.round(derivedRisk)));
               }
             }
             let idx = times.findIndex((timeStr) => new Date(timeStr) > now);
@@ -2237,7 +2302,7 @@ out tags center 120;`;
 
         try {
           const baseUrl = 'https://api.open-meteo.com/v1/forecast';
-          const params = 'current=temperature_2m,weather_code,wind_speed_10m,cloud_cover&hourly=temperature_2m,weather_code,wind_speed_10m,precipitation_probability&forecast_days=1&timezone=auto';
+          const params = 'current=temperature_2m,weather_code,wind_speed_10m,cloud_cover&hourly=temperature_2m,weather_code,wind_speed_10m,precipitation_probability,precipitation&forecast_days=1&timezone=auto';
           const METEO_BATCH_SIZE = 48;
           const METEO_MIN_BATCH_SIZE = 12;
           const METEO_CHUNK_DELAY_MS = 280;
