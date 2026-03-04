@@ -175,7 +175,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 18h13';
+    const APP_BUILD = '04/03/2026 - 18h17';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -965,27 +965,76 @@
         } catch (_) {}
       }, []);
 
-      function generateSearchGrid(lat, lon, radiusKm, stepKm = 15, maxPoints = 320) {
-        const points = [];
-        const degLatPerKm = 1 / 111;
-        const latStep = stepKm * degLatPerKm;
-        const lonStep = stepKm / (111 * Math.max(Math.cos((lat * Math.PI) / 180), 0.2));
-        const latDelta = radiusKm * degLatPerKm;
-        const lonDelta = radiusKm / (111 * Math.max(Math.cos((lat * Math.PI) / 180), 0.2));
-        for (let y = -latDelta; y <= latDelta; y += latStep) {
-          for (let x = -lonDelta; x <= lonDelta; x += lonStep) {
-            const pLat = lat + y;
-            const pLon = lon + x;
-            if (haversine(lat, lon, pLat, pLon) <= radiusKm) {
-              points.push({ lat: Number(pLat.toFixed(5)), lon: Number(pLon.toFixed(5)) });
+      function generateSearchGrid(lat, lon, radiusKm, baseStepKm = 15, maxPoints = 320) {
+        const safeRadiusKm = Math.max(8, Number(radiusKm) || 0);
+        const stepKm = Math.max(8, Math.min(baseStepKm, safeRadiusKm / 8));
+        const rowStepKm = stepKm * Math.sqrt(3) / 2;
+        const jitterKm = Math.min(stepKm * 0.22, 2.4);
+        const latFactor = 1 / 111;
+        const lonFactor = 1 / (111 * Math.max(Math.cos((lat * Math.PI) / 180), 0.2));
+        const points = [{ lat: Number(lat.toFixed(5)), lon: Number(lon.toFixed(5)), _distKm: 0, _angle: 0 }];
+
+        let rowIdx = 0;
+        for (let yKm = -safeRadiusKm; yKm <= safeRadiusKm; yKm += rowStepKm, rowIdx++) {
+          const rowOffsetKm = rowIdx % 2 === 0 ? 0 : stepKm / 2;
+          let colIdx = 0;
+          for (let xKm = -safeRadiusKm; xKm <= safeRadiusKm; xKm += stepKm, colIdx++) {
+            let pxKm = xKm + rowOffsetKm;
+            let pyKm = yKm;
+            const baseDistKm = Math.hypot(pxKm, pyKm);
+            if (baseDistKm > safeRadiusKm) continue;
+            if (baseDistKm > 0.001) {
+              const seedA = Math.sin((rowIdx + 1) * 12.9898 + (colIdx + 1) * 78.233 + lat * 0.873 + lon * 0.527) * 43758.5453;
+              const seedB = Math.sin((rowIdx + 1) * 93.9898 + (colIdx + 1) * 67.345 + lat * 1.137 + lon * 0.261) * 24634.6345;
+              const randA = seedA - Math.floor(seedA);
+              const randB = seedB - Math.floor(seedB);
+              pxKm += (randA - 0.5) * jitterKm * 2;
+              pyKm += (randB - 0.5) * jitterKm * 2;
             }
+            const distKm = Math.hypot(pxKm, pyKm);
+            if (distKm > safeRadiusKm || distKm < stepKm * 0.2) continue;
+            const pLat = lat + pyKm * latFactor;
+            const pLon = lon + pxKm * lonFactor;
+            points.push({
+              lat: Number(pLat.toFixed(5)),
+              lon: Number(pLon.toFixed(5)),
+              _distKm: distKm,
+              _angle: Math.atan2(pyKm, pxKm),
+            });
           }
         }
-        if (points.length <= maxPoints) return points;
-        const stride = points.length / maxPoints;
-        const sampled = [];
-        for (let i = 0; i < maxPoints; i++) sampled.push(points[Math.floor(i * stride)]);
-        return sampled;
+
+        if (points.length <= maxPoints) return points.map((p) => ({ lat: p.lat, lon: p.lon }));
+
+        const center = points[0];
+        const others = points.slice(1).sort((a, b) => (a._distKm - b._distKm) || (a._angle - b._angle));
+        const rings = Math.max(12, Math.min(40, Math.round(Math.sqrt(maxPoints) * 2)));
+        const perRing = Math.max(1, Math.floor((maxPoints - 1) / rings));
+        const sampled = [center];
+
+        for (let r = 0; r < rings && sampled.length < maxPoints; r++) {
+          const minD = (safeRadiusKm * r) / rings;
+          const maxD = (safeRadiusKm * (r + 1)) / rings;
+          const ringPoints = others.filter((p) => p._distKm >= minD && (r === rings - 1 ? p._distKm <= maxD : p._distKm < maxD));
+          if (ringPoints.length === 0) continue;
+          const stride = ringPoints.length / perRing;
+          for (let i = 0; i < perRing && sampled.length < maxPoints; i++) {
+            sampled.push(ringPoints[Math.floor(i * stride)] || ringPoints[ringPoints.length - 1]);
+          }
+        }
+
+        if (sampled.length < maxPoints) {
+          const used = new Set(sampled.map((p) => `${p.lat},${p.lon}`));
+          for (const p of others) {
+            const key = `${p.lat},${p.lon}`;
+            if (used.has(key)) continue;
+            used.add(key);
+            sampled.push(p);
+            if (sampled.length >= maxPoints) break;
+          }
+        }
+
+        return sampled.slice(0, maxPoints).map((p) => ({ lat: p.lat, lon: p.lon }));
       }
 
       async function reverseGeocodeFrBatch(points, signal) {
@@ -1013,7 +1062,28 @@
             const feat = data?.features?.[0];
             const props = feat?.properties || {};
             const label = props.city || props.name || props.label || fallbackLabel(p, idx);
-            return { ...p, name: label, type: props.type || 'zone' };
+            const coords = feat?.geometry?.coordinates;
+            let nextLat = p.lat;
+            let nextLon = p.lon;
+            if (Array.isArray(coords) && coords.length >= 2) {
+              const snappedLon = Number(coords[0]);
+              const snappedLat = Number(coords[1]);
+              if (Number.isFinite(snappedLat) && Number.isFinite(snappedLon)) {
+                const snapDistKm = haversine(p.lat, p.lon, snappedLat, snappedLon);
+                if (snapDistKm <= Math.min(7, radiusKm * 0.2 + 1)) {
+                  nextLat = snappedLat;
+                  nextLon = snappedLon;
+                }
+              }
+            }
+            return {
+              ...p,
+              lat: Number(nextLat.toFixed(5)),
+              lon: Number(nextLon.toFixed(5)),
+              _dist: position ? haversine(position.lat, position.lon, nextLat, nextLon) : p._dist,
+              name: label,
+              type: props.type || 'zone',
+            };
           } catch (e) {
             return null;
           }
