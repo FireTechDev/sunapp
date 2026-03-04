@@ -125,9 +125,9 @@
   <div id="root"></div>
 
   <script type="text/babel" data-type="module">
-    const { useState, useEffect, useRef, useMemo } = React;
+    const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 17h10';
+    const APP_BUILD = '04/03/2026 - 17h13';
 
     // ---------- Utilitaires ----------
     function haversine(lat1, lon1, lat2, lon2) {
@@ -198,6 +198,28 @@
     function formatTravelTime(minutes) {
       if (minutes >= 60) return `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
       return `${minutes} min`;
+    }
+
+    const FALLBACK_POSITION = { lat: 48.8566, lon: 2.3522 };
+    const LAST_POSITION_STORAGE_KEY = 'sunapp:last-position';
+    function loadSavedPosition() {
+      try {
+        const raw = localStorage.getItem(LAST_POSITION_STORAGE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        const lat = Number(parsed?.lat);
+        const lon = Number(parsed?.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+        return { lat, lon };
+      } catch (_) {
+        return null;
+      }
+    }
+    function savePosition(position) {
+      try {
+        if (!position) return;
+        localStorage.setItem(LAST_POSITION_STORAGE_KEY, JSON.stringify({ lat: position.lat, lon: position.lon }));
+      } catch (_) {}
     }
 
     // Température ressentie (refroidissement éolien) — formule Jagger & Osczevski (T °C, V km/h)
@@ -706,12 +728,15 @@
 
     // ---------- App ----------
     function App() {
-      const [position, setPosition] = useState(null);
+      const initialSavedPosition = useMemo(() => loadSavedPosition(), []);
+      const [position, setPosition] = useState(initialSavedPosition || FALLBACK_POSITION);
+      const [positionSource, setPositionSource] = useState(initialSavedPosition ? 'saved' : 'fallback');
       const [travelTimeIndex, setTravelTimeIndex] = useState(3);
       const [cities, setCities] = useState([]);
       const [isFallbackMode, setIsFallbackMode] = useState(false);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState(null);
+      const [requestingGeo, setRequestingGeo] = useState(false);
       const [selectedCity, setSelectedCity] = useState(null);
       const [sortBy, setSortBy] = useState('sunscore');
       const [minTemp, setMinTemp] = useState(0);
@@ -838,30 +863,42 @@
         return out;
       }
 
-      // Géolocalisation au chargement
-      useEffect(() => {
+      const requestUserGeolocation = useCallback(() => {
         if (!navigator.geolocation) {
-          setError('La géolocalisation n\'est pas supportée par votre navigateur.');
-          setLoading(false);
+          setError('La géolocalisation n\'est pas supportée. Utilisation d\'une position de secours.');
           return;
         }
+        if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+          setError('Sur Safari mobile, la géolocalisation exige HTTPS. Utilisation de la position de secours.');
+          return;
+        }
+        setRequestingGeo(true);
         navigator.geolocation.getCurrentPosition(
           (pos) => {
-            setPosition({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+            const nextPos = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+            setPosition(nextPos);
+            setPositionSource('geo');
+            savePosition(nextPos);
             setError(null);
+            setRequestingGeo(false);
           },
           (err) => {
             const messages = {
-              1: 'Accès à la position refusé. Autorisez la géolocalisation pour utiliser SunApp.',
-              2: 'Position indisponible. Vérifiez votre connexion ou le GPS.',
-              3: 'Délai de géolocalisation dépassé. Réessayez.',
+              1: 'Accès à la position refusé. Vous pouvez continuer avec la position de secours.',
+              2: 'Position indisponible. Vérifiez la connexion/GPS ou continuez sans géolocalisation.',
+              3: 'Délai de géolocalisation dépassé. Réessayez avec le bouton.',
             };
-            setError(messages[err.code] || 'Erreur de géolocalisation.');
-            setLoading(false);
+            setError(messages[err.code] || 'Erreur de géolocalisation. Utilisation de la position de secours.');
+            setRequestingGeo(false);
           },
           { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
         );
       }, []);
+
+      // Tentative initiale (non bloquante), puis bouton manuel possible
+      useEffect(() => {
+        requestUserGeolocation();
+      }, [requestUserGeolocation]);
 
       // Recherche météo par maillage (grille dans le rayon) + Open-Meteo batch + API Géo
       async function runSearch() {
@@ -1068,7 +1105,8 @@
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
           attribution: '© OpenStreetMap',
         }).addTo(map);
-        L.marker([position.lat, position.lon]).addTo(map).bindPopup('Vous êtes ici');
+        const userMarkerLabel = positionSource === 'geo' ? 'Vous êtes ici' : 'Position utilisée (sans GPS)';
+        L.marker([position.lat, position.lon]).addTo(map).bindPopup(userMarkerLabel);
         const circle = L.circle([position.lat, position.lon], {
           radius: radiusKm * 1000,
           color: '#1e40af',
@@ -1085,7 +1123,7 @@
           }
           circleRef.current = null;
         };
-      }, [position]);
+      }, [position, positionSource]);
 
       useEffect(() => {
         if (circleRef.current && mapInstanceRef.current) {
@@ -1126,20 +1164,17 @@
         mapInstanceRef.current.setView([selectedCity.lat, selectedCity.lon], 10);
       }, [selectedCity]);
 
-      if (error && !position) {
-        return (
-          <div className="min-h-screen flex items-center justify-center p-6 bg-sky-50">
-            <div className="bg-white rounded-2xl shadow-lg max-w-md w-full p-6 text-center border border-slate-100">
-              <div className="flex justify-center text-amber-500 mb-4"><IconAlertCircle /></div>
-              <h1 className="text-xl font-semibold text-slate-800 mb-2">SunApp</h1>
-              <p className="text-slate-600 mb-4">{error}</p>
-              <p className="text-sm text-slate-500">Rechargez la page après avoir autorisé la position.</p>
-            </div>
-          </div>
-        );
-      }
-
-      const locationTitle = 'chez vous';
+      const locationTitle = positionSource === 'geo'
+        ? 'chez vous'
+        : positionSource === 'saved'
+          ? 'votre dernière position enregistrée'
+          : 'une position de secours (Paris)';
+      const isSecureGeoContext = window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+      const geoBannerText = positionSource === 'geo'
+        ? 'Position GPS active.'
+        : positionSource === 'saved'
+          ? 'GPS non disponible: dernière position enregistrée utilisée.'
+          : 'GPS non disponible: position de secours utilisée.';
       const destinationLabel = cities.length === 1 ? '1 zone trouvée' : `${cities.length} zones trouvées`;
 
       return (
@@ -1149,6 +1184,25 @@
               <IconSun className="text-amber-500" /> SunApp
             </h1>
           </header>
+
+          <div className="mb-4 bg-white rounded-2xl shadow-md border border-slate-100 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-slate-700">{geoBannerText}</p>
+              <button
+                type="button"
+                onClick={requestUserGeolocation}
+                disabled={requestingGeo}
+                className="px-3 py-1.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 disabled:opacity-60"
+              >
+                {requestingGeo ? 'Localisation…' : 'Utiliser ma position'}
+              </button>
+            </div>
+            <p className="text-xs text-slate-500 mt-2">
+              {isSecureGeoContext
+                ? 'Si le GPS est refusé, l’app continue avec une position de secours.'
+                : 'Sur Safari iOS, la géolocalisation fonctionne seulement sur HTTPS (ou localhost).'}
+            </p>
+          </div>
 
           {/* Rayon d'action + carte juste en dessous pour voir l'interaction */}
           <div className="mb-4">
