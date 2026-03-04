@@ -740,16 +740,17 @@
       }, [radiusKm]);
 
       useEffect(() => {
-        if (!mapInstanceRef.current || !cities.length) return;
+        if (!mapInstanceRef.current) return;
         markersRef.current.forEach((m) => m.remove());
         markersRef.current = [];
-        cities.forEach((city) => {
+        if (displayedCities.length === 0) return;
+        displayedCities.forEach((city) => {
           const m = L.marker([city.lat, city.lon])
             .addTo(mapInstanceRef.current)
             .bindPopup(`${city.name} — ${city.temp != null ? Math.round(city.temp) + '°' : '—'}${city.feelsLike != null && Math.round(city.feelsLike) !== Math.round(city.temp) ? ' (ressenti ' + Math.round(city.feelsLike) + '°)' : ''}`);
           markersRef.current.push(m);
         });
-      }, [cities]);
+      }, [displayedCities]);
 
       useEffect(() => {
         if (!selectedCity || !mapInstanceRef.current) return;
