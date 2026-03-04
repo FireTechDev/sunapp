@@ -127,6 +127,20 @@
       border: none;
       box-shadow: 0 0 0 3px rgba(54, 167, 235, 0.3);
     }
+    .sunapp-map-badge.leaflet-tooltip {
+      background: rgba(15, 23, 42, 0.92);
+      border: 0;
+      color: #ffffff;
+      border-radius: 9999px;
+      padding: 2px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.28);
+      white-space: nowrap;
+    }
+    .sunapp-map-badge.leaflet-tooltip::before {
+      display: none;
+    }
   </style>
 </head>
 <body class="min-h-screen bg-sky-50 text-slate-800">
@@ -135,7 +149,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 17h31';
+    const APP_BUILD = '04/03/2026 - 17h45';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -1325,12 +1339,11 @@
           const score5 = getWeatherScore(city).score;
           const radiusPx = Math.max(3, 2 + score5 * 2.6);
           const fill = score5 >= 5 ? '#f97316' : score5 >= 4 ? '#fb923c' : score5 >= 3 ? '#f59e0b' : score5 >= 2 ? '#facc15' : '#9ca3af';
-          const roundedTemp = city.temp != null ? Math.round(city.temp) : null;
-          const roundedFeels = city.feelsLike != null ? Math.round(city.feelsLike) : null;
-          let tempLabel = '';
-          if (roundedTemp != null && roundedFeels != null) tempLabel = ` • ${roundedTemp}° (ressenti ${roundedFeels}°)`;
-          else if (roundedTemp != null) tempLabel = ` • ${roundedTemp}°`;
-          else if (roundedFeels != null) tempLabel = ` • ressenti ${roundedFeels}°`;
+          const roundedFeels = city.feelsLike != null
+            ? Math.round(city.feelsLike)
+            : (city.temp != null ? Math.round(city.temp) : null);
+          const mapBadgeLabel = `${getWeatherIcon(city.weather_code)} ${roundedFeels != null ? `${roundedFeels}°` : '—'}`;
+          const popupTempLabel = roundedFeels != null ? ` • ressenti ${roundedFeels}°` : '';
           const m = L.circleMarker([city.lat, city.lon], {
             radius: radiusPx,
             color: fill,
@@ -1339,7 +1352,14 @@
             weight: 1,
           })
             .addTo(mapInstanceRef.current)
-            .bindPopup(`${city.name} — ${score5}/5${tempLabel}`);
+            .bindTooltip(mapBadgeLabel, {
+              permanent: true,
+              direction: 'top',
+              offset: [0, -(radiusPx + 5)],
+              className: 'sunapp-map-badge',
+              opacity: 1,
+            })
+            .bindPopup(`${city.name} — ${score5}/5${popupTempLabel}`);
           markersRef.current.push(m);
         });
       }, [displayedCities]);
