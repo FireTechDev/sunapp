@@ -149,7 +149,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 17h45';
+    const APP_BUILD = '04/03/2026 - 17h48';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -853,7 +853,7 @@
       const [requestingGeo, setRequestingGeo] = useState(false);
       const [selectedCity, setSelectedCity] = useState(null);
       const [sortBy, setSortBy] = useState('sunscore');
-      const [minTemp, setMinTemp] = useState(0);
+      const [minTemp, setMinTemp] = useState(10);
       const [maxWindKmh, setMaxWindKmh] = useState(0);
       const [minWeatherLevel, setMinWeatherLevel] = useState(0);
       const [pwaUpdateInfo, setPwaUpdateInfo] = useState(null);
@@ -1490,19 +1490,19 @@
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
             <div className="bg-white rounded-2xl shadow-md border border-slate-100 p-4 lg:col-span-2">
-              <label className="block text-sm font-medium text-slate-700 mb-2">Température min. : {minTemp > 0 ? `${minTemp} °C` : 'Aucune'}</label>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Température min. : {minTemp} °C</label>
               <input
                 type="range"
-                min="0"
+                min="10"
                 max="25"
                 step="1"
                 value={minTemp}
                 onChange={(e) => setMinTemp(Number(e.target.value))}
                 className="w-full h-2 bg-slate-200 rounded-full appearance-none cursor-pointer"
-                style={{ background: `linear-gradient(to right, #36A7EB 0%, #36A7EB ${(minTemp / 25) * 100}%, #e2e8f0 ${(minTemp / 25) * 100}%, #e2e8f0 100%)` }}
+                style={{ background: `linear-gradient(to right, #36A7EB 0%, #36A7EB ${((minTemp - 10) / 15) * 100}%, #e2e8f0 ${((minTemp - 10) / 15) * 100}%, #e2e8f0 100%)` }}
               />
               <div className="flex justify-between text-xs text-slate-500 mt-1">
-                <span>0 (tous)</span>
+                <span>10 °C</span>
                 <span>25 °C</span>
               </div>
               <label className="block text-sm font-medium text-slate-700 mt-4 mb-2">Vent max : {maxWindKmh > 0 ? `${maxWindKmh} km/h` : 'Aucune limite'}</label>
