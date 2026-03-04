@@ -421,28 +421,27 @@
       // Récupère les lieux depuis OpenStreetMap (Overpass API) — pas de liste en dur
       async function fetchOverpassPlaces(lat, lon, radiusMeters) {
         const r = Math.round(radiusMeters);
-        const query = `[out:json][timeout:30];(node["place"~"^city$|^town$|^village$|^suburb$"](around:${r},${lat},${lon});node["leisure"="park"](around:${r},${lat},${lon});node["natural"="beach"](around:${r},${lat},${lon});node["tourism"~"^resort$|^beach_resort$|^theme_park$"](around:${r},${lat},${lon}););out body;`;
+        const queryFull = `[out:json][timeout:25];(node["place"~"^city$|^town$|^village$|^suburb$"](around:${r},${lat},${lon});node["leisure"="park"](around:${r},${lat},${lon});node["natural"="beach"](around:${r},${lat},${lon});node["tourism"~"^resort$|^beach_resort$|^theme_park$"](around:${r},${lat},${lon}););out body;`;
+        const queryShort = `[out:json][timeout:20];node["place"~"city|town|village|suburb"](around:${r},${lat},${lon});out body;`;
         const endpoints = [
-          'https://overpass.kumi.systems/api/interpreter',
           'https://overpass-api.de/api/interpreter',
+          'https://overpass.kumi.systems/api/interpreter',
         ];
-        const proxyUrl = (u) => 'https://corsproxy.io/?' + encodeURIComponent(u);
         let data = null;
-        for (const baseUrl of endpoints) {
-          const direct = baseUrl + '?data=' + encodeURIComponent(query);
-          const viaProxy = proxyUrl(direct);
-          for (const url of [viaProxy, direct]) {
-            try {
-              const res = await fetch(url);
-              if (res.ok) {
-                data = await res.json();
-                if (data && data.elements && data.elements.length >= 0) break;
-              }
-            } catch (_) {}
-          }
-          if (data && data.elements && data.elements.length > 0) break;
+        for (const url of endpoints) {
+          try {
+            let res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(queryFull), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+            if (!res.ok) {
+              const getUrl = url + '?data=' + encodeURIComponent(queryShort);
+              res = await fetch('https://corsproxy.io/?' + encodeURIComponent(getUrl));
+            }
+            if (res.ok) {
+              data = await res.json();
+              if (data && data.elements && data.elements.length > 0) break;
+            }
+          } catch (_) {}
         }
-        if (!data || !data.elements || data.elements.length === 0) throw new Error('Lieux indisponibles. Lancez l\'app depuis un serveur local (ex: npx serve) pour activer la recherche.');
+        if (!data || !data.elements || data.elements.length === 0) throw new Error('Lieux indisponibles. Vérifiez votre connexion ou réessayez dans un instant.');
         const seen = new Set();
         return data.elements.map((el) => {
           const lat = el.lat ?? el.center?.lat;
