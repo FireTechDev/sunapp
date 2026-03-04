@@ -602,23 +602,13 @@
           return;
         }
 
-        const places = candidates;
+        const batch1 = candidates.slice(0, 30);
+        const batch2 = candidates.slice(30, 60);
 
-        try {
-          const latStr = places.map((p) => p.lat).join(',');
-          const lonStr = places.map((p) => p.lon).join(',');
-          const meteoUrl = `https://api.open-meteo.com/v1/forecast?latitude=${latStr}&longitude=${lonStr}&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,cloud_cover&timezone=auto`;
-
-          let meteoRes = await fetch(meteoUrl);
-          if (!meteoRes.ok) {
-            try { meteoRes = await fetch('https://corsproxy.io/?' + encodeURIComponent(meteoUrl)); } catch (_) {}
-          }
-          if (!meteoRes.ok) throw new Error('Météo indisponible. Réessayez.');
-
-          const meteo = await meteoRes.json();
-          const results = Array.isArray(meteo) ? meteo : [meteo];
-          const withWeather = places.map((p, i) => {
-            const r = results[i];
+        function mergeMeteo(places, results, isArray) {
+          const list = Array.isArray(results) ? results : [results];
+          return places.map((p, i) => {
+            const r = list[i];
             const cur = r?.current || {};
             const temp = cur.temperature_2m;
             const wind = cur.wind_speed_10m;
@@ -634,8 +624,9 @@
               _dist: haversine(position.lat, position.lon, p.lat, p.lon),
             };
           });
+        }
 
-          const byDist = (a, b) => (a._dist ?? 0) - (b._dist ?? 0);
+        function sortAndTakeBest(list, n = 30) {
           const byBestWeather = (a, b) => {
             const sunA = SUN_CODES.includes(a.weather_code) ? 1 : 0;
             const sunB = SUN_CODES.includes(b.weather_code) ? 1 : 0;
@@ -643,29 +634,66 @@
             const feltA = a.feelsLike ?? a.temp ?? -999;
             const feltB = b.feelsLike ?? b.temp ?? -999;
             if (Math.abs(feltB - feltA) >= 0.5) return feltB - feltA;
-            return byDist(a, b);
+            return (a._dist ?? 0) - (b._dist ?? 0);
           };
-          const best30 = [...withWeather].sort(byBestWeather).slice(0, 30).map(({ _dist, ...p }) => p);
-
-          const filtered = best30.filter((c) => SUN_CODES.includes(c.weather_code));
-          const rest = best30.filter((c) => !SUN_CODES.includes(c.weather_code));
-          const sunnySorted = filtered.sort((a, b) => haversine(position.lat, position.lon, a.lat, a.lon) - haversine(position.lat, position.lon, b.lat, b.lon));
+          const sorted = [...list].sort(byBestWeather).slice(0, n);
+          const sunny = sorted.filter((c) => SUN_CODES.includes(c.weather_code));
+          const rest = sorted.filter((c) => !SUN_CODES.includes(c.weather_code));
+          const byDist = (a, b) => (a._dist ?? 0) - (b._dist ?? 0);
+          const sunnySorted = sunny.sort(byDist);
           const restSorted = rest.sort((a, b) => {
-            const codeA = a.weather_code ?? 99;
-            const codeB = b.weather_code ?? 99;
+            const codeA = a.weather_code ?? 99, codeB = b.weather_code ?? 99;
             if (codeA !== codeB) return codeA - codeB;
-            return haversine(position.lat, position.lon, a.lat, a.lon) - haversine(position.lat, position.lon, b.lat, b.lon);
+            return byDist(a, b);
           });
-          const sortedFinal = sunnySorted.length > 0
-            ? [...sunnySorted, ...restSorted]
-            : restSorted;
+          return sunnySorted.length > 0 ? [...sunnySorted, ...restSorted] : restSorted;
+        }
 
-          setIsFallbackMode(filtered.length === 0 && restSorted.length > 0);
-          setCities(sortedFinal);
+        try {
+          const baseUrl = 'https://api.open-meteo.com/v1/forecast';
+          const params = 'current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,cloud_cover&timezone=auto';
+
+          const fetchMeteo = (places) => {
+            if (places.length === 0) return Promise.resolve([]);
+            const latStr = places.map((p) => p.lat).join(',');
+            const lonStr = places.map((p) => p.lon).join(',');
+            const url = `${baseUrl}?latitude=${latStr}&longitude=${lonStr}&${params}`;
+            return fetch(url)
+              .then((r) => (!r.ok ? fetch('https://corsproxy.io/?' + encodeURIComponent(url)) : r))
+              .then((r) => r.ok ? r.json() : Promise.reject(new Error('Météo indisponible')))
+              .then((data) => mergeMeteo(places, data, Array.isArray(data)));
+          };
+
+          const promise1 = fetchMeteo(batch1);
+          const promise2 = fetchMeteo(batch2);
+          let fullResultShown = false;
+
+          promise1.then((withWeather1) => {
+            if (withWeather1.length === 0) return;
+            if (fullResultShown) return;
+            const first30 = sortAndTakeBest(withWeather1, 30);
+            setIsFallbackMode(first30.filter((c) => SUN_CODES.includes(c.weather_code)).length === 0 && first30.length > 0);
+            setCities(first30);
+            setLoading(false);
+          }).catch(() => {});
+
+          Promise.all([promise1, promise2]).then(([w1, w2]) => {
+            fullResultShown = true;
+            const combined = [...(w1 || []), ...(w2 || [])];
+            if (combined.length === 0) return;
+            const best30 = sortAndTakeBest(combined, 30);
+            const hasSunny = best30.some((c) => SUN_CODES.includes(c.weather_code));
+            setIsFallbackMode(!hasSunny && best30.length > 0);
+            setCities(best30);
+            setLoading(false);
+          }).catch((err) => {
+            setError(err.message || 'Météo indisponible. Réessayez.');
+            setCities([]);
+            setLoading(false);
+          });
         } catch (err) {
-          setError(err.message || 'Erreur météo. Vérifiez votre connexion.');
+          setError(err.message || 'Erreur. Réessayez.');
           setCities([]);
-        } finally {
           setLoading(false);
         }
       }
