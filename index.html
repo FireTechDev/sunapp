@@ -149,7 +149,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 17h48';
+    const APP_BUILD = '04/03/2026 - 17h50';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -1335,14 +1335,15 @@
         markersRef.current.forEach((m) => m.remove());
         markersRef.current = [];
         if (displayedCities.length === 0) return;
-        displayedCities.forEach((city) => {
+        displayedCities.forEach((city, idx) => {
+          const rank = idx + 1;
           const score5 = getWeatherScore(city).score;
           const radiusPx = Math.max(3, 2 + score5 * 2.6);
           const fill = score5 >= 5 ? '#f97316' : score5 >= 4 ? '#fb923c' : score5 >= 3 ? '#f59e0b' : score5 >= 2 ? '#facc15' : '#9ca3af';
           const roundedFeels = city.feelsLike != null
             ? Math.round(city.feelsLike)
             : (city.temp != null ? Math.round(city.temp) : null);
-          const mapBadgeLabel = `${getWeatherIcon(city.weather_code)} ${roundedFeels != null ? `${roundedFeels}°` : '—'}`;
+          const mapBadgeLabel = `#${rank} ${getWeatherIcon(city.weather_code)} ${roundedFeels != null ? `${roundedFeels}°` : '—'}`;
           const popupTempLabel = roundedFeels != null ? ` • ressenti ${roundedFeels}°` : '';
           const m = L.circleMarker([city.lat, city.lon], {
             radius: radiusPx,
@@ -1359,7 +1360,7 @@
               className: 'sunapp-map-badge',
               opacity: 1,
             })
-            .bindPopup(`${city.name} — ${score5}/5${popupTempLabel}`);
+            .bindPopup(`${rank}. ${city.name} — ${score5}/5${popupTempLabel}`);
           markersRef.current.push(m);
         });
       }, [displayedCities]);
