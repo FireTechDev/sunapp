@@ -187,7 +187,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 21h36';
+    const APP_BUILD = '04/03/2026 - 21h45';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -1995,7 +1995,7 @@ out tags center 120;`;
       const [sortBy, setSortBy] = useState('sunscore');
       const [minTemp, setMinTemp] = useState(15);
       const [maxWindKmh, setMaxWindKmh] = useState(20);
-      const [minWeatherLevel, setMinWeatherLevel] = useState(0);
+      const [minWeatherLevel, setMinWeatherLevel] = useState(2);
       const [pwaUpdateInfo, setPwaUpdateInfo] = useState(null);
       const [pwaOfflineReady, setPwaOfflineReady] = useState(false);
       const [isApplyingPwaUpdate, setIsApplyingPwaUpdate] = useState(false);
@@ -2028,10 +2028,6 @@ out tags center 120;`;
           };
         });
       }, [cities, timeScope]);
-      const isFallbackMode = useMemo(
-        () => scopedCities.length > 0 && scopedCities.every((city) => !SUN_CODES.includes(city.weather_code)),
-        [scopedCities]
-      );
 
       // WeatherScore 0–100 : météo pure (temp 50 %, vent 50 %). Malus ×0,5 si pas ensoleillé/ciel dégagé.
       function weatherScore(city) {
@@ -2047,6 +2043,21 @@ out tags center 120;`;
         const isSunny = SUN_CODES.includes(city.weather_code ?? -1);
         if (!isSunny) score *= 0.5;
         return Math.max(0, Math.min(100, score));
+      }
+      function sunshineScore(city) {
+        const code = Number(city?.weather_code);
+        let base = 45;
+        if (code === 0) base = 120;
+        else if (code === 1) base = 108;
+        else if (code === 2) base = 96;
+        else if (code === 3) base = 70;
+        else if ([45, 48].includes(code)) base = 55;
+        else if ([95, 96, 99].includes(code)) base = 6;
+        else if ([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82].includes(code)) base = 18;
+        const cloudPenalty = Number.isFinite(Number(city?.cloud_cover)) ? Number(city.cloud_cover) * 0.3 : 18;
+        const rainPenalty = Number.isFinite(Number(city?.precipitation_risk)) ? Number(city.precipitation_risk) * 0.25 : 12;
+        const sunnyBonus = SUN_CODES.includes(code) ? 8 : 0;
+        return base + sunnyBonus - cloudPenalty - rainPenalty;
       }
 
       const displayedCities = useMemo(() => {
@@ -2068,7 +2079,15 @@ out tags center 120;`;
           });
         }
         else if (sortBy === 'calm') list.sort((a, b) => (a.wind_speed ?? 999) - (b.wind_speed ?? 999));
-        else if (sortBy === 'clearest') list.sort((a, b) => (a.cloud_cover ?? 999) - (b.cloud_cover ?? 999));
+        else if (sortBy === 'clearest') {
+          list.sort((a, b) => {
+            const sa = sunshineScore(a);
+            const sb = sunshineScore(b);
+            if (sb !== sa) return sb - sa;
+            if (!position) return 0;
+            return haversine(position.lat, position.lon, a.lat, a.lon) - haversine(position.lat, position.lon, b.lat, b.lon);
+          });
+        }
         else if (sortBy === 'sunscore') {
           list.sort((a, b) => {
             const sa = Number.isFinite(Number(a.weatherScore100)) ? Number(a.weatherScore100) : weatherScore(a);
@@ -2822,18 +2841,15 @@ out tags center 120;`;
         ? `${getWeatherFilterLabel(minWeatherLevel)} ou mieux`
         : getWeatherFilterLabel(0);
 
-      const locationTitle = positionSource === 'geo'
-        ? 'chez vous'
-        : positionSource === 'saved'
-          ? 'votre dernière position enregistrée'
-          : 'une position de secours (Paris)';
       const isSecureGeoContext = window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
       const geoBannerText = positionSource === 'geo'
         ? 'Position GPS active.'
         : positionSource === 'saved'
           ? 'GPS non disponible: dernière position enregistrée utilisée.'
           : 'GPS non disponible: position de secours utilisée.';
-      const destinationLabel = scopedCities.length === 1 ? '1 zone trouvée' : `${scopedCities.length} zones trouvées`;
+      const foundLabel = `${scopedCities.length} résultat${scopedCities.length > 1 ? 's' : ''} trouvé${scopedCities.length > 1 ? 's' : ''}`;
+      const displayedLabel = `${displayedCities.length} affiché${displayedCities.length > 1 ? 's' : ''}`;
+      const destinationLabel = `${foundLabel} - ${displayedLabel}`;
 
       return (
         <div className="min-h-screen p-4 md:p-6 bg-sky-50">
@@ -3038,15 +3054,12 @@ out tags center 120;`;
           <div className="bg-white rounded-2xl shadow-lg border border-slate-100 overflow-hidden">
             <div className="bg-[#36A7EB] text-white px-6 py-4 rounded-t-2xl">
               <h2 className="text-lg font-bold">
-                {isFallbackMode ? `Prévisions météo (${activeScopeInfo?.label || "Aujourd'hui"})` : `Prévisions météo près de ${locationTitle} • ${activeScopeInfo?.label || "Aujourd'hui"}`}
+                Prévisions météo
               </h2>
               <p className="text-sm text-white/90 mt-0.5">
                 {loading && position
                   ? 'Recherche en cours…'
-                  : scopedCities.length === 0 && !error
-                    ? 'Appuyez sur Rechercher pour lancer une recherche.'
-                    : (displayedCities.length !== scopedCities.length ? `${destinationLabel} — ${displayedCities.length} affichés` : destinationLabel)}
-                {isFallbackMode && scopedCities.length > 0 && ' — triés du moins nuageux au plus proche'}
+                  : destinationLabel}
               </p>
             </div>
             <div className="p-4 md:p-6">
@@ -3067,8 +3080,8 @@ out tags center 120;`;
                         <option value="distance">Le plus proche</option>
                         <option value="hottest">Le plus chaud</option>
                         <option value="calm">Le moins de vent</option>
-                        <option value="clearest">Ciel le plus pur</option>
-                        <option value="sunscore">Le Choix Parfait (WeatherScore)</option>
+                        <option value="clearest">Le plus ensoleillé</option>
+                        <option value="sunscore">Recommandé</option>
                       </select>
                     </label>
                   )}
