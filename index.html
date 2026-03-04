@@ -149,7 +149,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 17h59';
+    const APP_BUILD = '04/03/2026 - 18h01';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -772,7 +772,7 @@
                 <IconClock className="w-4 h-4 text-slate-500 shrink-0" />
                 <span>{driveLabel} en voiture</span>
                 <a
-                  href={`https://www.google.com/maps/dir/?api=1&origin=${userLat},${userLon}&destination=${city.lat},${city.lon}&travelmode=driving`}
+                  href={`https://www.waze.com/ul?ll=${city.lat},${city.lon}&navigate=yes`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-sky-600 hover:text-sky-700 font-medium ml-1"
