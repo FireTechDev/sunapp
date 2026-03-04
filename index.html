@@ -152,6 +152,16 @@
     };
     const WEATHER_LEVEL_LABELS = ['Tout temps', 'Pas de neige ni orage', 'Pas de pluie', 'Nuages OK', 'Soleil uniquement'];
 
+    // Température ressentie (refroidissement éolien) — formule Jagger & Osczevski (T °C, V km/h)
+    function windChill(T, V) {
+      if (T == null || V == null) return T;
+      const v = Number(V);
+      if (v < 5) return T;
+      const v016 = Math.pow(v, 0.16);
+      const Rc = 13.12 + 0.6215 * T - 11.37 * v016 + 0.3965 * T * v016;
+      return Math.round(Rc * 10) / 10;
+    }
+
     // Météo : appel direct (Open-Meteo autorise CORS). Pas de proxy.
     async function fetchNoCors(url) {
       return fetch(url);
@@ -321,7 +331,13 @@
             <div className="flex flex-wrap gap-4 mt-4 pt-3 border-t border-slate-100">
               <div className="flex items-center gap-1.5">
                 <IconThermometer className="w-5 h-5 text-orange-500 shrink-0" />
-                <span className="text-slate-700 font-medium">{city.temp != null ? `${Number(city.temp).toFixed(1)} °C` : '—'}</span>
+                <span className="text-slate-700 font-medium">
+                  {city.temp != null ? (
+                    city.feelsLike != null
+                      ? `${Number(city.temp).toFixed(1)} °C (ressenti ${Number(city.feelsLike).toFixed(1)} °C)`
+                      : `${Number(city.temp).toFixed(1)} °C`
+                  ) : '—'}
+                </span>
               </div>
               <div className="flex items-center gap-1.5">
                 <IconDroplet className="w-5 h-5 text-sky-500 shrink-0" />
@@ -372,7 +388,7 @@
       const circleRef = useRef(null);
 
       function sunScore(city) {
-        const t = city.temp != null ? city.temp : 20;
+        const t = (city.feelsLike != null ? city.feelsLike : city.temp) ?? 20;
         const w = city.wind_speed != null ? city.wind_speed : 10;
         const dist = position ? haversine(position.lat, position.lon, city.lat, city.lon) : 0;
         const tempScore = Math.max(0, 100 - 4 * Math.abs(t - 25));
@@ -391,14 +407,25 @@
             return estMin <= maxTravelMin;
           });
         }
-        if (minTemp > 0) list = list.filter((c) => c.temp != null && c.temp >= minTemp);
+        if (minTemp > 0) list = list.filter((c) => {
+          const t = c.feelsLike != null ? c.feelsLike : c.temp;
+          return t != null && t >= minTemp;
+        });
         if (maxWindKmh > 0) list = list.filter((c) => c.wind_speed != null && c.wind_speed <= maxWindKmh);
         if (minWeatherLevel > 0) {
           const allowed = WEATHER_LEVEL_CODES[minWeatherLevel];
           if (allowed) list = list.filter((c) => allowed.includes(c.weather_code ?? -1));
         }
         if (sortBy === 'distance' && position) list.sort((a, b) => haversine(position.lat, position.lon, a.lat, a.lon) - haversine(position.lat, position.lon, b.lat, b.lon));
-        else if (sortBy === 'hottest') list.sort((a, b) => (b.temp ?? -999) - (a.temp ?? -999));
+        else if (sortBy === 'hottest') {
+          const felt = (c) => c.feelsLike != null ? c.feelsLike : c.temp ?? -999;
+          list.sort((a, b) => {
+            const fa = felt(a), fb = felt(b);
+            const bandA = Math.round(fa), bandB = Math.round(fb);
+            if (bandA !== bandB) return bandB - bandA;
+            return fb - fa;
+          });
+        }
         else if (sortBy === 'calm') list.sort((a, b) => (a.wind_speed ?? 999) - (b.wind_speed ?? 999));
         else if (sortBy === 'clearest') list.sort((a, b) => (a.cloud_cover ?? 999) - (b.cloud_cover ?? 999));
         else if (sortBy === 'sunscore') list.sort((a, b) => sunScore(b) - sunScore(a));
@@ -543,11 +570,15 @@
           const withWeather = places.map((p, i) => {
             const r = results[i];
             const cur = r?.current || {};
+            const temp = cur.temperature_2m;
+            const wind = cur.wind_speed_10m;
+            const feelsLike = windChill(temp, wind);
             return {
               ...p,
-              temp: cur.temperature_2m,
+              temp,
+              feelsLike: feelsLike != null ? feelsLike : temp,
               weather_code: cur.weather_code,
-              wind_speed: cur.wind_speed_10m,
+              wind_speed: wind,
               humidity: cur.relative_humidity_2m,
               cloud_cover: cur.cloud_cover,
             };
@@ -625,7 +656,7 @@
         cities.forEach((city) => {
           const m = L.marker([city.lat, city.lon])
             .addTo(mapInstanceRef.current)
-            .bindPopup(`${city.name} — ${city.temp != null ? Math.round(city.temp) + '°' : '—'}`);
+            .bindPopup(`${city.name} — ${city.temp != null ? Math.round(city.temp) + '°' : '—'}${city.feelsLike != null && Math.round(city.feelsLike) !== Math.round(city.temp) ? ' (ressenti ' + Math.round(city.feelsLike) + '°)' : ''}`);
           markersRef.current.push(m);
         });
       }, [cities]);
