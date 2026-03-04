@@ -187,7 +187,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 20h59';
+    const APP_BUILD = '04/03/2026 - 21h04';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -318,6 +318,16 @@
       { score: 4, emoji: '☀️', label: 'Radieux', desc: 'Grand ciel bleu, température idéale. On sort les lunettes de soleil !', badgeClass: 'bg-emerald-500 text-white' },
       { score: 5, emoji: '😎', label: 'Parfait', desc: 'Conditions de carte postale : chaud, sans vent et 100% ensoleillé !', badgeClass: 'bg-green-500 text-white' },
     ];
+    const WEATHER_FILTER_LEVELS = [
+      { value: 0, label: '🌦️ Tout temps' },
+      { value: 1, label: '💩 Médiocre' },
+      { value: 2, label: '☁️ Passable' },
+      { value: 3, label: '🌤️ Agréable' },
+      { value: 4, label: '☀️ Parfait' },
+    ];
+    function getWeatherFilterLabel(level) {
+      return WEATHER_FILTER_LEVELS.find((item) => item.value === level)?.label || '🌦️ Tout temps';
+    }
     function getWeatherScore(city) {
       const code = city.weather_code ?? 99;
       const felt = city.feelsLike ?? city.temp ?? 15;
@@ -2531,8 +2541,8 @@ out tags center 120;`;
       }, [selectedCity]);
 
       const weatherLevelLabel = minWeatherLevel > 0
-        ? `${WEATHER_SCORE_CONFIG[minWeatherLevel]?.label || '—'} ou mieux`
-        : 'Tout temps';
+        ? `${getWeatherFilterLabel(minWeatherLevel)} ou mieux`
+        : getWeatherFilterLabel(0);
 
       const locationTitle = positionSource === 'geo'
         ? 'chez vous'
@@ -2689,16 +2699,22 @@ out tags center 120;`;
               <input
                 type="range"
                 min="0"
-                max="5"
+                max="4"
                 step="1"
                 value={minWeatherLevel}
                 onChange={(e) => setMinWeatherLevel(Number(e.target.value))}
                 className="w-full h-2 bg-slate-200 rounded-full appearance-none cursor-pointer"
-                style={{ background: `linear-gradient(to right, #36A7EB 0%, #36A7EB ${(minWeatherLevel / 5) * 100}%, #e2e8f0 ${(minWeatherLevel / 5) * 100}%, #e2e8f0 100%)` }}
+                style={{ background: `linear-gradient(to right, #36A7EB 0%, #36A7EB ${(minWeatherLevel / 4) * 100}%, #e2e8f0 ${(minWeatherLevel / 4) * 100}%, #e2e8f0 100%)` }}
               />
-              <div className="flex justify-between text-xs text-slate-500 mt-1">
-                <span>Tout temps</span>
-                <span>Parfait</span>
+              <div className="grid grid-cols-5 gap-1 text-[10px] text-slate-500 mt-1">
+                {WEATHER_FILTER_LEVELS.map((level, idx) => (
+                  <span
+                    key={level.value}
+                    className={idx === 0 ? 'text-left' : idx === WEATHER_FILTER_LEVELS.length - 1 ? 'text-right' : 'text-center'}
+                  >
+                    {level.label}
+                  </span>
+                ))}
               </div>
               <button
                 type="button"
