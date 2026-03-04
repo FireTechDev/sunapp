@@ -544,18 +544,18 @@
         const inRadius = withDist.filter((p) => p._dist <= radiusKm);
         setIsOutsideRadius(inRadius.length === 0);
         const source = inRadius.length > 0 ? inRadius : withDist;
-        const sorted = source
+        const candidates = source
           .sort((a, b) => a._dist - b._dist)
-          .slice(0, 30)
+          .slice(0, 60)
           .map(({ _dist, ...p }) => p);
 
-        if (sorted.length === 0) {
+        if (candidates.length === 0) {
           setLoading(false);
           setError('Aucun lieu à proximité. Élargissez le rayon ou vérifiez votre connexion.');
           return;
         }
 
-        const places = sorted;
+        const places = candidates;
 
         try {
           const latStr = places.map((p) => p.lat).join(',');
@@ -584,24 +584,36 @@
               wind_speed: wind,
               humidity: cur.relative_humidity_2m,
               cloud_cover: cur.cloud_cover,
+              _dist: haversine(position.lat, position.lon, p.lat, p.lon),
             };
           });
 
-          const filtered = withWeather.filter((c) => SUN_CODES.includes(c.weather_code));
-          const rest = withWeather.filter((c) => !SUN_CODES.includes(c.weather_code));
-          const byDist = (a, b) => haversine(position.lat, position.lon, a.lat, a.lon) - haversine(position.lat, position.lon, b.lat, b.lon);
-          const sunnySorted = filtered.sort((a, b) => byDist(a, b));
+          const byDist = (a, b) => (a._dist ?? 0) - (b._dist ?? 0);
+          const byBestWeather = (a, b) => {
+            const sunA = SUN_CODES.includes(a.weather_code) ? 1 : 0;
+            const sunB = SUN_CODES.includes(b.weather_code) ? 1 : 0;
+            if (sunB !== sunA) return sunB - sunA;
+            const feltA = a.feelsLike ?? a.temp ?? -999;
+            const feltB = b.feelsLike ?? b.temp ?? -999;
+            if (Math.abs(feltB - feltA) >= 0.5) return feltB - feltA;
+            return byDist(a, b);
+          };
+          const best30 = [...withWeather].sort(byBestWeather).slice(0, 30).map(({ _dist, ...p }) => p);
+
+          const filtered = best30.filter((c) => SUN_CODES.includes(c.weather_code));
+          const rest = best30.filter((c) => !SUN_CODES.includes(c.weather_code));
+          const sunnySorted = filtered.sort((a, b) => haversine(position.lat, position.lon, a.lat, a.lon) - haversine(position.lat, position.lon, b.lat, b.lon));
           const restSorted = rest.sort((a, b) => {
             const codeA = a.weather_code ?? 99;
             const codeB = b.weather_code ?? 99;
             if (codeA !== codeB) return codeA - codeB;
-            return byDist(a, b);
+            return haversine(position.lat, position.lon, a.lat, a.lon) - haversine(position.lat, position.lon, b.lat, b.lon);
           });
           const sortedFinal = sunnySorted.length > 0
             ? [...sunnySorted, ...restSorted]
             : restSorted;
 
-          setIsFallbackMode(sunnySorted.length === 0 && restSorted.length > 0);
+          setIsFallbackMode(filtered.length === 0 && restSorted.length > 0);
           setCities(sortedFinal);
         } catch (err) {
           setError(err.message || 'Erreur météo. Vérifiez votre connexion.');
