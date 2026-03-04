@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SunApp — Trouvez le soleil</title>
+  <!-- Tailwind via CDN : choix volontaire pour fichier unique sans build (voir https://tailwindcss.com/docs/installation pour la prod) -->
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            sun: { 50: '#fffbeb', 100: '#fef3c7', 200: '#fde68a', 300: '#fcd34d', 400: '#fbbf24', 500: '#f59e0b', 600: '#d97706', 700: '#b45309', 800: '#92400e', 900: '#78350f' },
+            sky: { 400: '#36A7EB', 50: '#E8F4FC' },
+            glass: 'rgba(255,255,255,0.08)',
+            glassBorder: 'rgba(255,255,255,0.12)',
+          },
+          backdropBlur: { xs: '2px' },
+        },
+      },
+    };
+  </script>
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- React -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel pour JSX dans le navigateur (choix volontaire pour fichier unique sans build) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+    body { font-family: 'Outfit', sans-serif; }
+    .bento-card {
+      background: rgba(255,255,255,0.06);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 1rem;
+    }
+    .radar-scanner {
+      position: relative;
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 50% 50%, rgba(54, 167, 235, 0.2) 0%, transparent 70%);
+      border: 2px solid rgba(54, 167, 235, 0.5);
+      overflow: hidden;
+    }
+    .radar-scanner::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      background: conic-gradient(from 0deg, transparent 0deg, rgba(54, 167, 235, 0.5) 60deg, transparent 120deg);
+      animation: radar-sweep 2s linear infinite;
+    }
+    .radar-scanner::after {
+      content: '';
+      position: absolute;
+      inset: 8px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(255, 255, 255, 0.9) 0%, rgba(248, 250, 252, 0.95) 70%);
+    }
+    @keyframes radar-sweep {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .radar-dot {
+      position: absolute;
+      width: 6px;
+      height: 6px;
+      background: #36A7EB;
+      border-radius: 50%;
+      box-shadow: 0 0 10px rgba(54, 167, 235, 0.6);
+      animation: radar-pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes radar-pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(1.2); }
+    }
+    .city-card {
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .city-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 40px rgba(54, 167, 235, 0.15);
+    }
+    .card-visual {
+      background: linear-gradient(135deg, #E8F4FC 0%, #B8E0F4 100%);
+    }
+    .card-map-preview {
+      background: linear-gradient(145deg, #f0f9ff 0%, #e0f2fe 100%);
+    }
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      height: 8px;
+      border-radius: 9999px;
+      background: #334155;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #36A7EB, #0ea5e9);
+      cursor: pointer;
+      box-shadow: 0 0 0 3px rgba(54, 167, 235, 0.3);
+    }
+    input[type="range"]::-moz-range-thumb {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #36A7EB, #0ea5e9);
+      cursor: pointer;
+      border: none;
+      box-shadow: 0 0 0 3px rgba(54, 167, 235, 0.3);
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-sky-50 text-slate-800">
+  <script src="places.js"></script>
+  <div id="root"></div>
+
+  <script type="text/babel" data-type="module">
+    const { useState, useEffect, useRef, useMemo } = React;
+
+    // ---------- Utilitaires ----------
+    function haversine(lat1, lon1, lat2, lon2) {
+      const R = 6371; // km
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a =
+        Math.sin(dLat/2) * Math.sin(dLat/2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon/2) * Math.sin(dLon/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    }
+
+    const SUN_CODES = [0, 1, 2]; // 0=clear, 1=mainly clear, 2=partly cloudy
+    // Niveaux météo pour le slider : 0=tout, 1=pas neige/orage, 2=pas précipitations, 3=nuages ok, 4=soleil
+    const WEATHER_LEVEL_CODES = {
+      0: null,
+      1: [0,1,2,3,45,48,51,53,55,56,57,61,63,65,66,67,80,81,82],
+      2: [0,1,2,3,45,48],
+      3: [0,1,2,3],
+      4: [0,1,2],
+    };
+    const WEATHER_LEVEL_LABELS = ['Tout temps', 'Pas de neige ni orage', 'Pas de pluie', 'Nuages OK', 'Soleil uniquement'];
+
+    // Météo : appel direct (Open-Meteo autorise CORS). Pas de proxy.
+    async function fetchNoCors(url) {
+      return fetch(url);
+    }
+
+
+    // Libellés météo WMO (Open-Meteo) en français
+    const WEATHER_LABELS = {
+      0: 'Ciel dégagé', 1: 'Plutôt dégagé', 2: 'Partiellement nuageux', 3: 'Couvert',
+      45: 'Brouillard', 48: 'Brouillard givrant', 51: 'Bruine légère', 53: 'Bruine', 55: 'Bruine dense',
+      56: 'Bruine verglaçante légère', 57: 'Bruine verglaçante dense', 61: 'Pluie légère', 63: 'Pluie modérée', 65: 'Pluie forte',
+      66: 'Pluie verglaçante légère', 67: 'Pluie verglaçante forte', 71: 'Neige légère', 73: 'Neige modérée', 75: 'Neige forte',
+      77: 'Grains de neige', 80: 'Averses légères', 81: 'Averses modérées', 82: 'Averses violentes',
+      85: 'Légères chutes de neige', 86: 'Fortes chutes de neige', 95: 'Orage', 96: 'Orage avec grêle légère', 99: 'Orage avec grêle forte',
+    };
+    function getWeatherLabel(code) {
+      return WEATHER_LABELS[code] != null ? WEATHER_LABELS[code] : '—';
+    }
+
+    const PLACE_TYPE_LABELS = { city: 'Ville', town: 'Bourg', village: 'Village', hamlet: 'Hameau', locality: 'Lieu-dit', suburb: 'Agglomération', quarter: 'Quartier', isolated_dwelling: 'Écart', resort: 'Station / Domaine', attraction: 'Site', theme_park: 'Parc', park: 'Parc', nature_reserve: 'Réserve', picnic_site: 'Aire', stadium: 'Stade', pitch: 'Terrain' };
+    function getPlaceTypeLabel(type) {
+      return PLACE_TYPE_LABELS[type] || type || 'Lieu';
+    }
+
+    // ---------- Icônes (Lucide-style inline SVGs) ----------
+    const IconSun = () => (
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+    );
+    const IconMapPin = () => (
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+    );
+    const IconWind = () => (
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2.5 2.5 0 1 1 11 8H2"/><path d="M12.6 19.4A2.5 2.5 0 1 0 14 15H2"/></svg>
+    );
+    const IconThermometer = () => (
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></svg>
+    );
+    const IconAlertCircle = () => (
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    );
+    const IconRefresh = () => (
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+    );
+    const IconClock = () => (
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    );
+    const IconDroplet = () => (
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/></svg>
+    );
+    const IconCamera = () => (
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+    );
+    const IconCloudSun = () => (
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v2M4.93 4.93l1.41 1.41M2 12h2M4.93 19.07l1.41-1.41M12 22v-2M19.07 19.07l-1.41-1.41M22 12h-2"/><path d="M12 6a4 4 0 0 0-4 4 4 4 0 0 0 4 4h6a4 4 0 0 0 0-8 4 4 0 0 0-4-4Z"/></svg>
+    );
+    const IconExternalLink = () => (
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+    );
+
+    // ---------- RadarScanner (animation chargement) ----------
+    function RadarScanner() {
+      return (
+        <div className="flex flex-col items-center justify-center gap-4 py-8">
+          <div className="radar-scanner">
+            <div className="radar-dot" style={{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }} />
+          </div>
+          <p className="text-sm text-slate-500">Scan des villes en cours...</p>
+        </div>
+      );
+    }
+
+    // ---------- Carte ville (style maquette : blanc, bannière bleue, visuels, météo, À voir) ----------
+    function CityCard({ city, userLat, userLon, onShowOnMap, isRecommended }) {
+      const [placeImageUrl, setPlaceImageUrl] = useState(null);
+
+      useEffect(() => {
+        let cancelled = false;
+        const lat = city.lat;
+        const lon = city.lon;
+        const url = `https://fr.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=500&format=json&origin=*`;
+        fetch(url)
+          .then((r) => r.json())
+          .then((data) => {
+            if (cancelled) return;
+            const pageId = data?.query?.geosearch?.[0]?.pageid;
+            if (!pageId) return;
+            return fetch(`https://fr.wikipedia.org/w/api.php?action=query&prop=pageimages&pithumbsize=500&pageids=${pageId}&format=json&origin=*`);
+          })
+          .then((r) => r && r.json())
+          .then((data) => {
+            if (cancelled || !data) return;
+            const pages = data?.query?.pages;
+            const page = pages && Object.values(pages)[0];
+            const thumb = page?.thumbnail?.source;
+            if (thumb) setPlaceImageUrl(thumb);
+          })
+          .catch(() => {});
+        return () => { cancelled = true; };
+      }, [city.lat, city.lon]);
+
+      const dist = haversine(userLat, userLon, city.lat, city.lon);
+      const driveMin = Math.round((dist / 50) * 60);
+      const driveLabel = driveMin >= 60 ? `${Math.floor(driveMin / 60)} h` + (driveMin % 60 ? ` ${driveMin % 60} min` : '') : `${driveMin} min`;
+      const hasSun = SUN_CODES.includes(city.weather_code);
+      const weatherLabel = getWeatherLabel(city.weather_code);
+
+      return (
+        <div
+          className="city-card bg-white rounded-2xl shadow-lg overflow-hidden cursor-pointer border border-slate-100 relative"
+          onClick={() => onShowOnMap(city)}
+        >
+          {isRecommended && (
+            <div className="absolute top-2 right-2 z-10 px-2 py-1 rounded-lg bg-amber-400 text-amber-900 text-xs font-bold shadow">
+              Recommandé 🌟
+            </div>
+          )}
+          {/* Photo du lieu (Wikipedia) ou placeholder */}
+          <div className="p-3 pb-0">
+            <div className="card-visual rounded-xl aspect-[4/3] flex items-center justify-center overflow-hidden bg-slate-100 relative">
+              {placeImageUrl ? (
+                <img
+                  src={placeImageUrl}
+                  alt={city.name}
+                  className="w-full h-full object-cover"
+                  onError={() => setPlaceImageUrl(null)}
+                />
+              ) : null}
+              {!placeImageUrl && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-sky-100 to-sky-200 text-sky-700">
+                  <IconMapPin className="w-10 h-10 mb-2 opacity-80" />
+                  <span className="text-sm font-medium">{city.name}</span>
+                  <span className="text-xs text-sky-600 mt-0.5">Photo non disponible</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="p-4 pt-3">
+            <h3 className="text-xl font-bold text-slate-800">{city.name}</h3>
+            {city.type && <p className="text-xs text-sky-600 font-medium mt-0.5">{getPlaceTypeLabel(city.type)}</p>}
+
+            {/* Ligne : distance, temps voiture, lien itinéraire | météo */}
+            <div className="flex flex-wrap items-center justify-between gap-2 mt-2">
+              <div className="flex items-center gap-1.5 text-slate-600 text-sm flex-wrap">
+                <IconMapPin className="w-4 h-4 text-slate-500 shrink-0" />
+                <span>{dist.toFixed(1)} km</span>
+                <span className="text-slate-400">•</span>
+                <IconClock className="w-4 h-4 text-slate-500 shrink-0" />
+                <span>{driveLabel} en voiture</span>
+                <a
+                  href={`https://www.google.com/maps/dir/?api=1&origin=${userLat},${userLon}&destination=${city.lat},${city.lon}&travelmode=driving`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-sky-600 hover:text-sky-700 font-medium ml-1"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <IconExternalLink className="w-3.5 h-3.5 shrink-0" /> Itinéraire
+                </a>
+              </div>
+              <div className="flex items-center gap-1.5 text-sky-600 text-sm">
+                {hasSun ? <IconSun className="w-5 h-5 text-amber-500 shrink-0" /> : <IconCloudSun className="w-5 h-5 text-slate-400 shrink-0" />}
+                <span className="font-medium">{weatherLabel}</span>
+              </div>
+            </div>
+
+            {/* Température, humidité, vent */}
+            <div className="flex flex-wrap gap-4 mt-4 pt-3 border-t border-slate-100">
+              <div className="flex items-center gap-1.5">
+                <IconThermometer className="w-5 h-5 text-orange-500 shrink-0" />
+                <span className="text-slate-700 font-medium">{city.temp != null ? `${Number(city.temp).toFixed(1)} °C` : '—'}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <IconDroplet className="w-5 h-5 text-sky-500 shrink-0" />
+                <span className="text-slate-700">{city.humidity != null ? `${city.humidity} %` : '—'}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <IconWind className="w-5 h-5 text-slate-400 shrink-0" />
+                <span className="text-slate-700">{city.wind_speed != null ? `${Number(city.wind_speed).toFixed(1)} km/h` : '—'}</span>
+              </div>
+            </div>
+
+            {/* À voir sur place */}
+            <div className="mt-4 pt-3 border-t border-slate-100">
+              <div className="flex items-center gap-2 text-sky-600 font-medium text-sm mb-2">
+                <IconCamera className="w-4 h-4" />
+                À voir sur place
+              </div>
+              <ul className="space-y-1 text-slate-600 text-sm">
+                <li className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0" />Centre historique et monuments</li>
+                <li className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0" />Parcs et espaces verts</li>
+                <li className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0" />Points d'intérêt locaux</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ---------- App ----------
+    function App() {
+      const [position, setPosition] = useState(null);
+      const [radiusKm, setRadiusKm] = useState(150);
+      const [maxTravelMin, setMaxTravelMin] = useState(0);
+      const [placesData, setPlacesData] = useState([]);
+      const [cities, setCities] = useState([]);
+      const [isFallbackMode, setIsFallbackMode] = useState(false);
+      const [isOutsideRadius, setIsOutsideRadius] = useState(false);
+      const [loading, setLoading] = useState(true);
+      const [error, setError] = useState(null);
+      const [selectedCity, setSelectedCity] = useState(null);
+      const [sortBy, setSortBy] = useState('distance');
+      const [minTemp, setMinTemp] = useState(0);
+      const [maxWindKmh, setMaxWindKmh] = useState(0);
+      const [minWeatherLevel, setMinWeatherLevel] = useState(0);
+      const mapRef = useRef(null);
+      const mapInstanceRef = useRef(null);
+      const markersRef = useRef([]);
+      const circleRef = useRef(null);
+
+      function sunScore(city) {
+        const t = city.temp != null ? city.temp : 20;
+        const w = city.wind_speed != null ? city.wind_speed : 10;
+        const dist = position ? haversine(position.lat, position.lon, city.lat, city.lon) : 0;
+        const tempScore = Math.max(0, 100 - 4 * Math.abs(t - 25));
+        const windScore = Math.max(0, 100 - 5 * w);
+        const distScore = Math.max(0, 100 - 0.3 * dist);
+        return (tempScore + windScore + distScore) / 3;
+      }
+
+      const AVG_SPEED_KMH = 80;
+      const displayedCities = useMemo(() => {
+        let list = [...cities];
+        if (maxTravelMin > 0 && position) {
+          list = list.filter((c) => {
+            const dist = haversine(position.lat, position.lon, c.lat, c.lon);
+            const estMin = (dist / AVG_SPEED_KMH) * 60;
+            return estMin <= maxTravelMin;
+          });
+        }
+        if (minTemp > 0) list = list.filter((c) => c.temp != null && c.temp >= minTemp);
+        if (maxWindKmh > 0) list = list.filter((c) => c.wind_speed != null && c.wind_speed <= maxWindKmh);
+        if (minWeatherLevel > 0) {
+          const allowed = WEATHER_LEVEL_CODES[minWeatherLevel];
+          if (allowed) list = list.filter((c) => allowed.includes(c.weather_code ?? -1));
+        }
+        if (sortBy === 'distance' && position) list.sort((a, b) => haversine(position.lat, position.lon, a.lat, a.lon) - haversine(position.lat, position.lon, b.lat, b.lon));
+        else if (sortBy === 'hottest') list.sort((a, b) => (b.temp ?? -999) - (a.temp ?? -999));
+        else if (sortBy === 'calm') list.sort((a, b) => (a.wind_speed ?? 999) - (b.wind_speed ?? 999));
+        else if (sortBy === 'clearest') list.sort((a, b) => (a.cloud_cover ?? 999) - (b.cloud_cover ?? 999));
+        else if (sortBy === 'sunscore') list.sort((a, b) => sunScore(b) - sunScore(a));
+        return list;
+      }, [cities, sortBy, minTemp, maxWindKmh, minWeatherLevel, maxTravelMin, position]);
+
+      // Lieux : chargés via places.js (fallback hors ligne)
+      useEffect(() => {
+        const raw = typeof window.SUNAPP_PLACES !== 'undefined' ? window.SUNAPP_PLACES : [];
+        const list = Array.isArray(raw) ? raw.map((p, i) => ({
+          id: 'p' + i,
+          name: p[0] || 'Sans nom',
+          lat: Number(p[1]),
+          lon: Number(p[2]),
+          type: p[3] || 'lieu',
+        })).filter((p) => !isNaN(p.lat) && !isNaN(p.lon)) : [];
+        setPlacesData(list);
+      }, []);
+
+      // Récupère les lieux depuis OpenStreetMap (Overpass API) — pas de liste en dur
+      async function fetchOverpassPlaces(lat, lon, radiusMeters) {
+        const r = Math.round(radiusMeters);
+        const query = `[out:json][timeout:30];(node["place"~"^city$|^town$|^village$|^suburb$"](around:${r},${lat},${lon});node["leisure"="park"](around:${r},${lat},${lon});node["natural"="beach"](around:${r},${lat},${lon});node["tourism"~"^resort$|^beach_resort$|^theme_park$"](around:${r},${lat},${lon}););out body;`;
+        const endpoints = [
+          'https://overpass.kumi.systems/api/interpreter',
+          'https://overpass-api.de/api/interpreter',
+        ];
+        const proxyUrl = (u) => 'https://corsproxy.io/?' + encodeURIComponent(u);
+        let data = null;
+        for (const baseUrl of endpoints) {
+          const direct = baseUrl + '?data=' + encodeURIComponent(query);
+          const viaProxy = proxyUrl(direct);
+          for (const url of [viaProxy, direct]) {
+            try {
+              const res = await fetch(url);
+              if (res.ok) {
+                data = await res.json();
+                if (data && data.elements && data.elements.length >= 0) break;
+              }
+            } catch (_) {}
+          }
+          if (data && data.elements && data.elements.length > 0) break;
+        }
+        if (!data || !data.elements || data.elements.length === 0) throw new Error('Lieux indisponibles. Lancez l\'app depuis un serveur local (ex: npx serve) pour activer la recherche.');
+        const seen = new Set();
+        return data.elements.map((el) => {
+          const lat = el.lat ?? el.center?.lat;
+          const lon = el.lon ?? el.center?.lon ?? el.center?.lng;
+          const name = el.tags?.name || el.tags?.['name:fr'] || 'Sans nom';
+          const type = el.tags?.place || el.tags?.leisure || el.tags?.natural || (el.tags?.tourism ? 'resort' : null) || 'place';
+          const key = `${lat?.toFixed(4)}-${lon?.toFixed(4)}`;
+          if (seen.has(key) || lat == null || lon == null) return null;
+          seen.add(key);
+          return { id: 'osm' + el.id, name, lat, lon, type };
+        }).filter(Boolean);
+      }
+
+      // Géolocalisation au chargement
+      useEffect(() => {
+        if (!navigator.geolocation) {
+          setError('La géolocalisation n\'est pas supportée par votre navigateur.');
+          setLoading(false);
+          return;
+        }
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            setPosition({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+            setError(null);
+          },
+          (err) => {
+            const messages = {
+              PERMISSION_DENIED: 'Accès à la position refusé. Autorisez la géolocalisation pour utiliser SunApp.',
+              POSITION_UNAVAILABLE: 'Position indisponible. Vérifiez votre connexion ou le GPS.',
+              TIMEOUT: 'Délai de géolocalisation dépassé. Réessayez.',
+            };
+            setError(messages[err.code] || 'Erreur de géolocalisation.');
+            setLoading(false);
+          },
+          { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+        );
+      }, []);
+
+      // Lieux (Overpass API en priorité, places.js en secours) + Météo (Open-Meteo)
+      async function runSearch() {
+        if (!position) return;
+        setLoading(true);
+        setError(null);
+        setCities([]);
+        setIsFallbackMode(false);
+        setIsOutsideRadius(false);
+
+        const proximityRadius = Math.min(radiusKm * 2, 100);
+        const radiusMeters = proximityRadius * 1000;
+
+        const EXCLUDED_TYPES = ['locality', 'hamlet', 'isolated_dwelling'];
+        let pool = [];
+        try {
+          pool = await fetchOverpassPlaces(position.lat, position.lon, radiusMeters);
+        } catch (e) {
+          setLoading(false);
+          setError(e.message || 'Impossible de charger les lieux. Lancez l\'app depuis un serveur local (npx serve) pour activer la recherche.');
+          return;
+        }
+        pool = pool.filter((p) => !EXCLUDED_TYPES.includes((p.type || '').toLowerCase()));
+
+        if (pool.length === 0) {
+          setLoading(false);
+          setError('Aucun lieu trouvé dans ce rayon. Élargissez le rayon.');
+          return;
+        }
+
+        const withDist = pool.map((p) => ({ ...p, _dist: haversine(position.lat, position.lon, p.lat, p.lon) }));
+        const inRadius = withDist.filter((p) => p._dist <= radiusKm);
+        setIsOutsideRadius(inRadius.length === 0);
+        const inProximity = withDist.filter((p) => p._dist <= proximityRadius);
+        const source = inRadius.length > 0 ? inRadius : inProximity;
+        const sorted = source
+          .sort((a, b) => a._dist - b._dist)
+          .slice(0, 30)
+          .map(({ _dist, ...p }) => p);
+
+        if (sorted.length === 0) {
+          setLoading(false);
+          setError('Aucun lieu à proximité. Élargissez le rayon ou vérifiez votre connexion.');
+          return;
+        }
+
+        const places = sorted;
+
+        try {
+          const latStr = places.map((p) => p.lat).join(',');
+          const lonStr = places.map((p) => p.lon).join(',');
+          const meteoUrl = `https://api.open-meteo.com/v1/forecast?latitude=${latStr}&longitude=${lonStr}&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,cloud_cover&timezone=auto`;
+
+          let meteoRes = await fetch(meteoUrl);
+          if (!meteoRes.ok) {
+            try { meteoRes = await fetch('https://corsproxy.io/?' + encodeURIComponent(meteoUrl)); } catch (_) {}
+          }
+          if (!meteoRes.ok) throw new Error('Météo indisponible. Réessayez.');
+
+          const meteo = await meteoRes.json();
+          const results = Array.isArray(meteo) ? meteo : [meteo];
+          const withWeather = places.map((p, i) => {
+            const r = results[i];
+            const cur = r?.current || {};
+            return {
+              ...p,
+              temp: cur.temperature_2m,
+              weather_code: cur.weather_code,
+              wind_speed: cur.wind_speed_10m,
+              humidity: cur.relative_humidity_2m,
+              cloud_cover: cur.cloud_cover,
+            };
+          });
+
+          const filtered = withWeather.filter((c) => SUN_CODES.includes(c.weather_code));
+          const rest = withWeather.filter((c) => !SUN_CODES.includes(c.weather_code));
+          const byDist = (a, b) => haversine(position.lat, position.lon, a.lat, a.lon) - haversine(position.lat, position.lon, b.lat, b.lon);
+          const sunnySorted = filtered.sort((a, b) => byDist(a, b));
+          const restSorted = rest.sort((a, b) => {
+            const codeA = a.weather_code ?? 99;
+            const codeB = b.weather_code ?? 99;
+            if (codeA !== codeB) return codeA - codeB;
+            return byDist(a, b);
+          });
+          const sortedFinal = sunnySorted.length > 0
+            ? [...sunnySorted, ...restSorted]
+            : restSorted;
+
+          setIsFallbackMode(sunnySorted.length === 0 && restSorted.length > 0);
+          setCities(sortedFinal);
+        } catch (err) {
+          setError(err.message || 'Erreur météo. Vérifiez votre connexion.');
+          setCities([]);
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      useEffect(() => {
+        if (position) runSearch();
+      }, [position?.lat, position?.lon, radiusKm, placesData.length]);
+
+      // Carte Leaflet + cercle du rayon de recherche
+      useEffect(() => {
+        if (!position || !mapRef.current) return;
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.remove();
+          markersRef.current = [];
+          circleRef.current = null;
+        }
+        const map = L.map(mapRef.current).setView([position.lat, position.lon], 8);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© OpenStreetMap',
+        }).addTo(map);
+        L.marker([position.lat, position.lon]).addTo(map).bindPopup('Vous êtes ici');
+        const circle = L.circle([position.lat, position.lon], {
+          radius: radiusKm * 1000,
+          color: '#1e40af',
+          fillColor: '#36A7EB',
+          fillOpacity: 0.2,
+          weight: 2,
+        }).addTo(map);
+        circleRef.current = circle;
+        mapInstanceRef.current = map;
+        return () => {
+          if (mapInstanceRef.current) {
+            mapInstanceRef.current.remove();
+            mapInstanceRef.current = null;
+          }
+          circleRef.current = null;
+        };
+      }, [position]);
+
+      useEffect(() => {
+        if (circleRef.current && mapInstanceRef.current) {
+          circleRef.current.setRadius(radiusKm * 1000);
+        }
+      }, [radiusKm]);
+
+      useEffect(() => {
+        if (!mapInstanceRef.current || !cities.length) return;
+        markersRef.current.forEach((m) => m.remove());
+        markersRef.current = [];
+        cities.forEach((city) => {
+          const m = L.marker([city.lat, city.lon])
+            .addTo(mapInstanceRef.current)
+            .bindPopup(`${city.name} — ${city.temp != null ? Math.round(city.temp) + '°' : '—'}`);
+          markersRef.current.push(m);
+        });
+      }, [cities]);
+
+      useEffect(() => {
+        if (!selectedCity || !mapInstanceRef.current) return;
+        mapInstanceRef.current.setView([selectedCity.lat, selectedCity.lon], 10);
+      }, [selectedCity]);
+
+      if (error && !position) {
+        return (
+          <div className="min-h-screen flex items-center justify-center p-6 bg-sky-50">
+            <div className="bg-white rounded-2xl shadow-lg max-w-md w-full p-6 text-center border border-slate-100">
+              <div className="flex justify-center text-amber-500 mb-4"><IconAlertCircle /></div>
+              <h1 className="text-xl font-semibold text-slate-800 mb-2">SunApp</h1>
+              <p className="text-slate-600 mb-4">{error}</p>
+              <p className="text-sm text-slate-500">Rechargez la page après avoir autorisé la position.</p>
+            </div>
+          </div>
+        );
+      }
+
+      const locationTitle = 'chez vous';
+      const destinationLabel = cities.length === 1 ? '1 lieu trouvé' : `${cities.length} lieux trouvés`;
+
+      return (
+        <div className="min-h-screen p-4 md:p-6 bg-sky-50">
+          <header className="mb-6">
+            <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+              <IconSun className="text-amber-500" /> SunApp
+            </h1>
+            <p className="text-slate-600 text-sm mt-1">Lieux ensoleillés à moins de {radiusKm} km</p>
+          </header>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+            <div className="bg-white rounded-2xl shadow-md border border-slate-100 p-4 lg:col-span-2">
+              <label className="block text-sm font-medium text-slate-700 mb-2">Rayon de recherche : {radiusKm} km</label>
+              <input
+                type="range"
+                min="50"
+                max="300"
+                step="10"
+                value={radiusKm}
+                onChange={(e) => setRadiusKm(Number(e.target.value))}
+                className="w-full h-2 bg-slate-200 rounded-full appearance-none cursor-pointer"
+                style={{ background: `linear-gradient(to right, #36A7EB 0%, #36A7EB ${((radiusKm - 50) / 250) * 100}%, #e2e8f0 ${((radiusKm - 50) / 250) * 100}%, #e2e8f0 100%)` }}
+              />
+              <div className="flex justify-between text-xs text-slate-500 mt-1">
+                <span>50 km</span>
+                <span>300 km</span>
+              </div>
+              <label className="block text-sm font-medium text-slate-700 mt-4 mb-2">Temps de trajet max : {maxTravelMin > 0 ? (maxTravelMin >= 60 ? `${Math.floor(maxTravelMin / 60)} h${maxTravelMin % 60 ? ` ${maxTravelMin % 60} min` : ''}` : `${maxTravelMin} min`) : 'Aucune limite'}</label>
+              <input
+                type="range"
+                min="0"
+                max="120"
+                step="15"
+                value={maxTravelMin}
+                onChange={(e) => setMaxTravelMin(Number(e.target.value))}
+                className="w-full h-2 bg-slate-200 rounded-full appearance-none cursor-pointer"
+                style={{ background: `linear-gradient(to right, #36A7EB 0%, #36A7EB ${(maxTravelMin / 120) * 100}%, #e2e8f0 ${(maxTravelMin / 120) * 100}%, #e2e8f0 100%)` }}
+              />
+              <div className="flex justify-between text-xs text-slate-500 mt-1">
+                <span>0 (tous)</span>
+                <span>2 h</span>
+              </div>
+              <label className="block text-sm font-medium text-slate-700 mt-4 mb-2">Température min. : {minTemp > 0 ? `${minTemp} °C` : 'Aucune'}</label>
+              <input
+                type="range"
+                min="0"
+                max="25"
+                step="1"
+                value={minTemp}
+                onChange={(e) => setMinTemp(Number(e.target.value))}
+                className="w-full h-2 bg-slate-200 rounded-full appearance-none cursor-pointer"
+                style={{ background: `linear-gradient(to right, #36A7EB 0%, #36A7EB ${(minTemp / 25) * 100}%, #e2e8f0 ${(minTemp / 25) * 100}%, #e2e8f0 100%)` }}
+              />
+              <div className="flex justify-between text-xs text-slate-500 mt-1">
+                <span>0 (tous)</span>
+                <span>25 °C</span>
+              </div>
+              <label className="block text-sm font-medium text-slate-700 mt-4 mb-2">Vent max : {maxWindKmh > 0 ? `${maxWindKmh} km/h` : 'Aucune limite'}</label>
+              <input
+                type="range"
+                min="0"
+                max="60"
+                step="5"
+                value={maxWindKmh}
+                onChange={(e) => setMaxWindKmh(Number(e.target.value))}
+                className="w-full h-2 bg-slate-200 rounded-full appearance-none cursor-pointer"
+                style={{ background: `linear-gradient(to right, #36A7EB 0%, #36A7EB ${(maxWindKmh / 60) * 100}%, #e2e8f0 ${(maxWindKmh / 60) * 100}%, #e2e8f0 100%)` }}
+              />
+              <div className="flex justify-between text-xs text-slate-500 mt-1">
+                <span>0 (tous)</span>
+                <span>60 km/h</span>
+              </div>
+              <label className="block text-sm font-medium text-slate-700 mt-4 mb-2">Météo : {WEATHER_LEVEL_LABELS[minWeatherLevel]}</label>
+              <input
+                type="range"
+                min="0"
+                max="4"
+                step="1"
+                value={minWeatherLevel}
+                onChange={(e) => setMinWeatherLevel(Number(e.target.value))}
+                className="w-full h-2 bg-slate-200 rounded-full appearance-none cursor-pointer"
+                style={{ background: `linear-gradient(to right, #36A7EB 0%, #36A7EB ${(minWeatherLevel / 4) * 100}%, #e2e8f0 ${(minWeatherLevel / 4) * 100}%, #e2e8f0 100%)` }}
+              />
+              <div className="flex justify-between text-xs text-slate-500 mt-1">
+                <span>Tout temps</span>
+                <span>Soleil uniquement</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => runSearch()}
+                disabled={loading}
+                className="mt-3 flex items-center gap-2 px-4 py-2 rounded-xl bg-sky-400 text-white hover:bg-sky-500 disabled:opacity-50 text-sm font-medium"
+              >
+                <IconRefresh /> {loading ? 'Recherche…' : 'Nouvelle recherche'}
+              </button>
+            </div>
+            <div className="bg-white rounded-2xl shadow-md border border-slate-100 min-h-[200px] h-[240px] overflow-hidden" ref={mapRef} id="map" />
+          </div>
+
+          {error && position && (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-4 flex items-center gap-3 text-amber-800">
+              <IconAlertCircle />
+              <p>{error}</p>
+            </div>
+          )}
+
+          {/* Carte principale avec bannière bleue (style maquette) */}
+          <div className="bg-white rounded-2xl shadow-lg border border-slate-100 overflow-hidden">
+            <div className="bg-[#36A7EB] text-white px-6 py-4 rounded-t-2xl">
+              <h2 className="text-lg font-bold">
+                {isFallbackMode ? 'Lieux à proximité (aucun ensoleillé)' : isOutsideRadius ? `Lieux les plus proches (au-delà de ${radiusKm} km)` : `Lieux ensoleillés près de ${locationTitle}`}
+              </h2>
+              <p className="text-sm text-white/90 mt-0.5">
+                {loading && position ? 'Recherche en cours…' : cities.length === 0 && !error ? 'Aucun lieu' : (displayedCities.length !== cities.length ? `${destinationLabel} — ${displayedCities.length} affichés` : destinationLabel)}
+                {isFallbackMode && cities.length > 0 && ' — triés du moins nuageux au plus proche'}
+                {isOutsideRadius && !isFallbackMode && cities.length > 0 && ' — aucun lieu dans le rayon, affichage des plus proches'}
+              </p>
+            </div>
+            <div className="p-4 md:p-6">
+              {loading && position ? (
+                <div className="bg-slate-50 rounded-xl py-8">
+                  <RadarScanner />
+                </div>
+              ) : (
+                <>
+                  {cities.length > 0 && (
+                    <label className="flex items-center gap-2 mb-4 text-slate-600 text-sm font-medium">
+                      Trier par :
+                      <select
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value)}
+                        className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm bg-white text-slate-800"
+                      >
+                        <option value="distance">Le plus proche</option>
+                        <option value="hottest">Le plus chaud</option>
+                        <option value="calm">Le moins de vent</option>
+                        <option value="clearest">Ciel le plus pur</option>
+                        <option value="sunscore">Le Choix Parfait (SunScore)</option>
+                      </select>
+                    </label>
+                  )}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {displayedCities.map((city, idx) => (
+                      <CityCard
+                        key={city.id}
+                        city={city}
+                        userLat={position?.lat}
+                        userLon={position?.lon}
+                        onShowOnMap={setSelectedCity}
+                        isRecommended={sortBy === 'sunscore' && idx === 0}
+                      />
+                    ))}
+                  </div>
+                  {!loading && position && cities.length > 0 && displayedCities.length === 0 && (
+                    <p className="text-slate-500 text-center py-6">Aucun lieu ne correspond aux filtres.</p>
+                  )}
+                </>
+              )}
+              {!loading && position && cities.length === 0 && !error && (
+                <p className="text-slate-500 text-center py-8">Aucun lieu trouvé. Augmentez le rayon.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
