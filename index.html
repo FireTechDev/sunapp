@@ -141,6 +141,32 @@
     .sunapp-map-badge.leaflet-tooltip::before {
       display: none;
     }
+    .sunapp-map-point-icon {
+      background: transparent;
+      border: 0;
+    }
+    .sunapp-map-point-number {
+      width: var(--sunapp-point-size, 24px);
+      height: var(--sunapp-point-size, 24px);
+      border-radius: 9999px;
+      background: var(--sunapp-point-color, #38bdf8);
+      border: 2px solid #ffffff;
+      color: #ffffff;
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 6px 14px rgba(15, 23, 42, 0.28);
+      user-select: none;
+      cursor: pointer;
+    }
+    .city-card-map-focus {
+      outline: 2px solid #38bdf8;
+      outline-offset: 2px;
+      transition: outline-color 0.2s ease;
+    }
   </style>
 </head>
 <body class="min-h-screen bg-sky-50 text-slate-800">
@@ -149,7 +175,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 18h08';
+    const APP_BUILD = '04/03/2026 - 18h13';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -601,7 +627,7 @@
       );
     }
 
-    function CityCard({ city, userLat, userLon, onShowOnMap, isRecommended, rank }) {
+    function CityCard({ city, userLat, userLon, onShowOnMap, isRecommended, rank, cardId }) {
       const [photoSlides, setPhotoSlides] = useState([]);
       const [photoIndex, setPhotoIndex] = useState(0);
 
@@ -672,6 +698,7 @@
 
       return (
         <div
+          id={cardId}
           className="city-card bg-white rounded-2xl shadow-lg overflow-hidden cursor-pointer border border-slate-100 relative"
           onClick={() => onShowOnMap(city)}
         >
@@ -925,6 +952,18 @@
         }
         return list;
       }, [cities, sortBy, minTemp, maxWindKmh, minWeatherLevel, position]);
+
+      const scrollToCardByRank = useCallback((rank) => {
+        const cardId = `city-card-${rank}`;
+        const target = document.getElementById(cardId);
+        if (!target) return;
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        target.classList.add('city-card-map-focus');
+        window.setTimeout(() => target.classList.remove('city-card-map-focus'), 1800);
+        try {
+          window.history.replaceState(null, '', `#${cardId}`);
+        } catch (_) {}
+      }, []);
 
       function generateSearchGrid(lat, lon, radiusKm, stepKm = 15, maxPoints = 320) {
         const points = [];
@@ -1344,32 +1383,39 @@
         displayedCities.forEach((city, idx) => {
           const rank = idx + 1;
           const score5 = getWeatherScore(city).score;
-          const radiusPx = Math.max(3, 2 + score5 * 2.6);
           const fill = score5 >= 5 ? '#f97316' : score5 >= 4 ? '#fb923c' : score5 >= 3 ? '#f59e0b' : score5 >= 2 ? '#facc15' : '#9ca3af';
+          const pointSize = Math.max(22, Math.round(12 + score5 * 2.8));
           const roundedFeels = city.feelsLike != null
             ? Math.round(city.feelsLike)
             : (city.temp != null ? Math.round(city.temp) : null);
-          const mapBadgeLabel = `${rank} ${getWeatherIcon(city.weather_code)} ${roundedFeels != null ? `${roundedFeels}°` : '—'}`;
+          const mapBadgeLabel = `${getWeatherIcon(city.weather_code)} ${roundedFeels != null ? `${roundedFeels}°` : '—'}`;
           const popupTempLabel = roundedFeels != null ? ` • ressenti ${roundedFeels}°` : '';
-          const m = L.circleMarker([city.lat, city.lon], {
-            radius: radiusPx,
-            color: fill,
-            fillColor: fill,
-            fillOpacity: 0.8,
-            weight: 1,
+          const m = L.marker([city.lat, city.lon], {
+            icon: L.divIcon({
+              className: 'sunapp-map-point-icon',
+              html: `<div class="sunapp-map-point-number" style="--sunapp-point-size:${pointSize}px;--sunapp-point-color:${fill};">${rank}</div>`,
+              iconSize: [pointSize, pointSize],
+              iconAnchor: [pointSize / 2, pointSize / 2],
+            }),
+            keyboard: true,
+            title: `${rank}. ${city.name}`,
           })
             .addTo(mapInstanceRef.current)
             .bindTooltip(mapBadgeLabel, {
               permanent: true,
               direction: 'top',
-              offset: [0, -(radiusPx + 5)],
+              offset: [0, -(pointSize * 0.8)],
               className: 'sunapp-map-badge',
               opacity: 1,
             })
             .bindPopup(`${rank}. ${city.name} — ${score5}/5${popupTempLabel}`);
+          m.on('click', () => {
+            setSelectedCity(city);
+            scrollToCardByRank(rank);
+          });
           markersRef.current.push(m);
         });
-      }, [displayedCities]);
+      }, [displayedCities, scrollToCardByRank]);
 
       useEffect(() => {
         if (!selectedCity || !mapInstanceRef.current) return;
@@ -1600,6 +1646,7 @@
                         key={city.id}
                         city={city}
                         rank={idx + 1}
+                        cardId={`city-card-${idx + 1}`}
                         userLat={position?.lat}
                         userLon={position?.lon}
                         onShowOnMap={setSelectedCity}
