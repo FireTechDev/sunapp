@@ -187,7 +187,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 21h04';
+    const APP_BUILD = '04/03/2026 - 21h24';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -325,6 +325,113 @@
       { value: 3, label: '🌤️ Agréable' },
       { value: 4, label: '☀️ Parfait' },
     ];
+    const TIME_SCOPE_OPTIONS = [
+      { key: 'today', label: "Aujourd'hui" },
+      { key: 'tomorrow', label: 'Demain' },
+      { key: 'weekend', label: 'Ce week-end' },
+    ];
+    const WINDOW_START_HOUR = 9;
+    const WINDOW_END_HOUR = 19;
+    const FORECAST_RELIABILITY_META = {
+      high: {
+        level: 'high',
+        label: 'Fiabilité élevée',
+        shortLabel: 'Fiable',
+        icon: '🟢',
+        className: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+      },
+      medium: {
+        level: 'medium',
+        label: 'Fiabilité moyenne',
+        shortLabel: 'Moyenne',
+        icon: '🟡',
+        className: 'border-amber-200 bg-amber-50 text-amber-700',
+      },
+      low: {
+        level: 'low',
+        label: 'Fiabilité limitée',
+        shortLabel: 'Limitée',
+        icon: '🟠',
+        className: 'border-orange-200 bg-orange-50 text-orange-700',
+      },
+    };
+    function startOfLocalDay(date) {
+      return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    }
+    function addLocalDays(date, days) {
+      const d = new Date(date);
+      d.setDate(d.getDate() + Number(days || 0));
+      return d;
+    }
+    function toLocalDayKey(date) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const d = String(date.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+    function dayOffset(baseDay, targetDay) {
+      const ms = startOfLocalDay(targetDay).getTime() - startOfLocalDay(baseDay).getTime();
+      return Math.round(ms / (24 * 60 * 60 * 1000));
+    }
+    function capitalizeFirst(value) {
+      const text = String(value || '');
+      if (!text) return '';
+      return text.charAt(0).toUpperCase() + text.slice(1);
+    }
+    function formatFrenchDayLabel(date) {
+      return capitalizeFirst(new Intl.DateTimeFormat('fr-FR', { weekday: 'long' }).format(date));
+    }
+    function formatFrenchDateHint(date) {
+      return capitalizeFirst(new Intl.DateTimeFormat('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }).format(date));
+    }
+    function getForecastReliabilityByOffset(maxOffset) {
+      if (maxOffset <= 1) return FORECAST_RELIABILITY_META.high;
+      if (maxOffset <= 3) return FORECAST_RELIABILITY_META.medium;
+      return FORECAST_RELIABILITY_META.low;
+    }
+    function buildTimeScopeContext(now = new Date()) {
+      const today = startOfLocalDay(now);
+      const tomorrow = addLocalDays(today, 1);
+      const isoWeekDayIndex = (today.getDay() + 6) % 7; // lundi=0 ... dimanche=6
+      const monday = addLocalDays(today, -isoWeekDayIndex);
+      const saturday = addLocalDays(monday, 5);
+      const sunday = addLocalDays(monday, 6);
+      const weekendDays = [saturday, sunday].filter((d) => d.getTime() >= today.getTime());
+      const effectiveWeekendDays = weekendDays.length > 0 ? weekendDays : [sunday];
+      const makeScope = (key, label, dayDates) => {
+        const dayKeys = dayDates.map((d) => toLocalDayKey(d));
+        const maxOffset = Math.max(...dayDates.map((d) => dayOffset(today, d)), 0);
+        const reliability = getForecastReliabilityByOffset(maxOffset);
+        return {
+          key,
+          label,
+          dayDates,
+          dayKeys,
+          maxOffset,
+          reliability,
+          dateHint: dayDates.length > 1
+            ? dayDates.map((d) => formatFrenchDateHint(d)).join(' + ')
+            : formatFrenchDateHint(dayDates[0]),
+        };
+      };
+      const scopes = {
+        today: makeScope('today', "Aujourd'hui", [today]),
+        tomorrow: makeScope('tomorrow', 'Demain', [tomorrow]),
+        weekend: makeScope('weekend', 'Ce week-end', effectiveWeekendDays),
+      };
+      const maxOffset = Math.max(
+        scopes.today.maxOffset,
+        scopes.tomorrow.maxOffset,
+        scopes.weekend.maxOffset,
+        1
+      );
+      return {
+        now,
+        today,
+        scopes,
+        forecastDays: Math.min(7, Math.max(2, maxOffset + 1)),
+      };
+    }
     function getWeatherFilterLabel(level) {
       return WEATHER_FILTER_LEVELS.find((item) => item.value === level)?.label || '🌦️ Tout temps';
     }
@@ -1052,6 +1159,180 @@ out tags center 120;`;
       if (m >= 0.2) return 35;
       return 20;
     }
+    function slotPrecipitationRisk(slot) {
+      let risk = 0;
+      const probability = Number(slot?.precipitationProbability);
+      if (Number.isFinite(probability)) {
+        risk = Math.max(risk, probability);
+      }
+      const amount = Number(slot?.precipitationAmount);
+      if (Number.isFinite(amount)) {
+        risk = Math.max(risk, precipitationRiskFromAmount(amount));
+      }
+      risk = Math.max(risk, precipitationRiskFloorFromCode(slot?.weatherCode));
+      return Math.max(0, Math.min(100, Math.round(risk)));
+    }
+    function pickSpreadSlots(slots, maxSlots = 5) {
+      const list = Array.isArray(slots) ? slots : [];
+      if (list.length <= maxSlots) return list.slice();
+      const picked = [];
+      const used = new Set();
+      for (let i = 0; i < maxSlots; i++) {
+        const idx = Math.round((i * (list.length - 1)) / Math.max(1, maxSlots - 1));
+        if (used.has(idx)) continue;
+        used.add(idx);
+        picked.push(list[idx]);
+      }
+      return picked;
+    }
+    function describeDayMood(daySlots) {
+      const slots = Array.isArray(daySlots) ? daySlots : [];
+      if (slots.length === 0) return { icon: '❔', label: 'incertain' };
+      const avgScore = slots.reduce((sum, slot) => sum + (slot?.score ?? 0), 0) / slots.length;
+      const maxRisk = slots.reduce((max, slot) => Math.max(max, slotPrecipitationRisk(slot)), 0);
+      const rainySignals = slots.filter((slot) => precipitationRiskFloorFromCode(slot?.weatherCode) >= 45).length;
+      const sunnyRatio = slots.filter((slot) => SUN_CODES.includes(slot?.weatherCode)).length / slots.length;
+      if (maxRisk >= 65 || rainySignals >= Math.ceil(slots.length * 0.35)) {
+        return { icon: '🌧️', label: 'pluvieux' };
+      }
+      if (avgScore >= 82 || (avgScore >= 74 && sunnyRatio >= 0.7 && maxRisk < 35)) {
+        return { icon: '☀️', label: 'parfait' };
+      }
+      if (avgScore >= 64 && maxRisk < 55) {
+        return { icon: '🌤️', label: 'agréable' };
+      }
+      if (avgScore >= 45) {
+        return { icon: '☁️', label: 'passable' };
+      }
+      return { icon: '💩', label: 'médiocre' };
+    }
+    function buildScopeForecast(scopeInfo, hourlySlots, currentSlot, nowMs) {
+      if (!scopeInfo) return null;
+      const dayKeySet = new Set(scopeInfo.dayKeys || []);
+      const inScopeDay = (slot) => dayKeySet.has(slot?.dayKey);
+      const inScopeWindow = (slot) => {
+        if (!inScopeDay(slot)) return false;
+        if (!Number.isFinite(slot?.hour)) return false;
+        if (slot.hour < WINDOW_START_HOUR || slot.hour > WINDOW_END_HOUR) return false;
+        if (scopeInfo.key === 'today' && Number.isFinite(nowMs) && slot.tsMs < nowMs - (30 * 60 * 1000)) return false;
+        return true;
+      };
+
+      const scopedWindowSlots = (hourlySlots || []).filter(inScopeWindow);
+      const scopedDaySlots = (hourlySlots || []).filter((slot) => inScopeDay(slot) && (scopeInfo.key !== 'today' || slot.tsMs >= nowMs - (30 * 60 * 1000)));
+      const candidateSlots = scopedWindowSlots.length > 0
+        ? scopedWindowSlots
+        : (scopedDaySlots.length > 0 ? scopedDaySlots : []);
+      const fallbackSlot = currentSlot || null;
+      const scoringPool = candidateSlots.length > 0
+        ? candidateSlots
+        : (fallbackSlot ? [fallbackSlot] : []);
+      if (scoringPool.length === 0) return null;
+
+      const bestSlot = scoringPool.reduce((best, slot) => {
+        if (!best) return slot;
+        if ((slot?.score ?? -Infinity) > (best?.score ?? -Infinity)) return slot;
+        if ((slot?.score ?? -Infinity) === (best?.score ?? -Infinity) && (slot?.tsMs ?? Infinity) < (best?.tsMs ?? Infinity)) return slot;
+        return best;
+      }, null);
+      if (!bestSlot) return null;
+
+      const precipSource = scopedWindowSlots.length > 0 ? scopedWindowSlots : scoringPool;
+      let precipitationRisk = null;
+      if (precipSource.length > 0) {
+        const maxRisk = precipSource.reduce((max, slot) => Math.max(max, slotPrecipitationRisk(slot)), 0);
+        if (Number.isFinite(maxRisk)) precipitationRisk = Math.round(maxRisk);
+      }
+
+      const trendBase = scopeInfo.key === 'weekend'
+        ? (scopedWindowSlots.filter((slot) => slot.dayKey === bestSlot.dayKey))
+        : scopedWindowSlots;
+      const trendSource = trendBase.length > 0
+        ? trendBase
+        : (candidateSlots.length > 0 ? candidateSlots : [bestSlot]);
+      const trendPicked = pickSpreadSlots(trendSource, 5);
+      let trendSlots = trendPicked.map((slot) => ({
+        label: Number.isFinite(slot?.hour) ? `${slot.hour}h` : '—',
+        temp: slot?.temp != null ? Number(slot.temp) : null,
+        feelsLike: slot?.feelsLike != null ? Number(slot.feelsLike) : null,
+        windKmh: slot?.windKmh != null ? Number(slot.windKmh) : null,
+        weatherCode: slot?.weatherCode ?? null,
+        score: slot?.score != null ? Number(slot.score) : null,
+      }));
+      while (trendSlots.length < 5) {
+        const last = trendSlots[trendSlots.length - 1];
+        if (!last) break;
+        trendSlots.push({ ...last });
+      }
+      if (trendSlots.length === 0) {
+        trendSlots = [{
+          label: '—',
+          temp: bestSlot.temp ?? null,
+          feelsLike: bestSlot.feelsLike ?? null,
+          windKmh: bestSlot.windKmh ?? null,
+          weatherCode: bestSlot.weatherCode ?? null,
+          score: bestSlot.score ?? null,
+        }];
+      }
+      const currentScore = trendSlots[0]?.score ?? bestSlot.score ?? 0;
+      const avgFuture = trendSlots.length > 1
+        ? trendSlots.slice(1).reduce((sum, slot) => sum + (slot.score ?? 0), 0) / (trendSlots.length - 1)
+        : currentScore;
+      const improvesSoon = scopeInfo.key === 'today' && trendSlots.length > 1 && (avgFuture >= currentScore * 1.2);
+      const peakIndex = trendSlots.length > 0
+        ? trendSlots.reduce((best, slot, idx) => (slot.score > trendSlots[best].score ? idx : best), 0)
+        : 0;
+      const showPeak = peakIndex > 0 && trendSlots[peakIndex].score > currentScore + 10;
+
+      const bestDate = Number.isFinite(bestSlot.tsMs) ? new Date(bestSlot.tsMs) : null;
+      const bestDayLabel = bestDate ? formatFrenchDayLabel(bestDate) : '';
+      const bestHourLabel = Number.isFinite(bestSlot.hour) ? `${bestSlot.hour}h` : '—';
+      const bestSlotLabel = scopeInfo.key === 'today'
+        ? bestHourLabel
+        : `${bestDayLabel} ${bestHourLabel}`.trim();
+
+      let weekendSummary = null;
+      if (scopeInfo.key === 'weekend') {
+        const daySummaries = (scopeInfo.dayDates || []).map((date) => {
+          const dayKey = toLocalDayKey(date);
+          const daySlots = (hourlySlots || []).filter((slot) => slot.dayKey === dayKey && slot.hour >= WINDOW_START_HOUR && slot.hour <= WINDOW_END_HOUR);
+          const mood = describeDayMood(daySlots);
+          return `${mood.icon} ${formatFrenchDayLabel(date)} ${mood.label}`;
+        });
+        weekendSummary = daySummaries.filter(Boolean).join(' / ');
+      }
+
+      const roundedFeels = bestSlot.feelsLike != null
+        ? Math.round(bestSlot.feelsLike)
+        : (bestSlot.temp != null ? Math.round(bestSlot.temp) : null);
+      const roundedWind = bestSlot.windKmh != null ? Math.round(bestSlot.windKmh) : null;
+      const fallbackBadge = `${getWeatherIcon(bestSlot.weatherCode)} ${roundedFeels != null ? `${roundedFeels}°` : '—'} - ${roundedWind != null ? `${roundedWind} kmh` : '— kmh'}`;
+      const mapBadgeLabel = weekendSummary || fallbackBadge;
+      const timeScopeSummary = weekendSummary || `Créneau retenu : ${bestSlotLabel} (${WINDOW_START_HOUR}h-${WINDOW_END_HOUR}h)`;
+
+      return {
+        temp: bestSlot.temp ?? null,
+        feelsLike: bestSlot.feelsLike ?? (bestSlot.temp ?? null),
+        weather_code: bestSlot.weatherCode ?? null,
+        wind_speed: bestSlot.windKmh ?? null,
+        cloud_cover: bestSlot.cloudCover ?? null,
+        precipitation_risk: precipitationRisk,
+        weatherScore100: Math.round(bestSlot.score ?? 0),
+        trendSlots: trendSlots.slice(0, 5),
+        hourlyTrend: trendSlots.slice(0, 5).map((slot) => slot.score),
+        trendTimes: trendSlots.slice(0, 5).map((slot) => slot.label),
+        improvesSoon: !!improvesSoon,
+        peakIndex: showPeak ? peakIndex : -1,
+        bestSlotLabel,
+        mapBadgeLabel,
+        weekendSummary,
+        timeScopeSummary,
+        reliability: scopeInfo.reliability,
+        scopeLabel: scopeInfo.label,
+        scopeDateHint: scopeInfo.dateHint,
+        bestTimestamp: bestSlot.tsMs ?? null,
+      };
+    }
 
     // ---------- TrendTimeline : aperçu horaire lisible sur 5 créneaux ----------
     function TrendTimeline({ slots, peakIndex }) {
@@ -1259,6 +1540,8 @@ out tags center 120;`;
       const cardTitle = hasGenericName ? 'Spot ensoleille' : city.name;
       const activeSlide = photoSlides[photoIndex] || null;
       const showCarouselControls = photoSlides.length > 1;
+      const scopeSummary = String(city.timeScopeSummary || '').trim();
+      const reliability = city.reliability || null;
       const poiIdeas = useMemo(
         () => selectPoiIdeas(poiRaw, city, MAX_CARD_POIS),
         [poiRaw, city.weather_code, city.wind_speed]
@@ -1415,6 +1698,20 @@ out tags center 120;`;
                 </a>
               </div>
             </div>
+
+            {(scopeSummary || reliability) && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                {scopeSummary && (
+                  <span className="text-slate-600">{scopeSummary}</span>
+                )}
+                {reliability && (
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border ${reliability.className || 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+                    <span aria-hidden="true">{reliability.icon || 'ℹ️'}</span>
+                    <span>{reliability.shortLabel || reliability.label || 'Fiabilité'}</span>
+                  </span>
+                )}
+              </div>
+            )}
 
             {/* Météo, température, risque pluie, vent */}
             <div className="flex flex-wrap gap-4 mt-4 pt-3 border-t border-slate-100">
@@ -1684,7 +1981,8 @@ out tags center 120;`;
       const [positionSource, setPositionSource] = useState(initialSavedPosition ? 'saved' : 'fallback');
       const [travelTimeIndex, setTravelTimeIndex] = useState(3);
       const [cities, setCities] = useState([]);
-      const [isFallbackMode, setIsFallbackMode] = useState(false);
+      const [timeScope, setTimeScope] = useState('today');
+      const [timeScopeContext, setTimeScopeContext] = useState(() => buildTimeScopeContext(new Date()));
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState(null);
       const [requestingGeo, setRequestingGeo] = useState(false);
@@ -1706,6 +2004,29 @@ out tags center 120;`;
 
       const travelTimeMin = TRAVEL_TIME_PRESETS_MIN[Math.min(travelTimeIndex, TRAVEL_TIME_PRESETS_MIN.length - 1)];
       const radiusKm = travelTimeToRadiusKm(travelTimeMin);
+      const scopeTabs = TIME_SCOPE_OPTIONS.map((option) => ({
+        ...option,
+        ...(timeScopeContext?.scopes?.[option.key] || {}),
+      }));
+      const activeScopeInfo = timeScopeContext?.scopes?.[timeScope] || timeScopeContext?.scopes?.today || null;
+      const scopedCities = useMemo(() => {
+        if (!Array.isArray(cities) || cities.length === 0) return [];
+        return cities.map((city) => {
+          const timeframes = city?.timeframes || {};
+          const fallbackFrame = timeframes.today || timeframes.tomorrow || timeframes.weekend || null;
+          const activeFrame = timeframes[timeScope] || fallbackFrame;
+          if (!activeFrame) return city;
+          return {
+            ...city,
+            ...activeFrame,
+            activeScopeKey: timeScope,
+          };
+        });
+      }, [cities, timeScope]);
+      const isFallbackMode = useMemo(
+        () => scopedCities.length > 0 && scopedCities.every((city) => !SUN_CODES.includes(city.weather_code)),
+        [scopedCities]
+      );
 
       // WeatherScore 0–100 : météo pure (temp 50 %, vent 50 %). Malus ×0,5 si pas ensoleillé/ciel dégagé.
       function weatherScore(city) {
@@ -1724,7 +2045,7 @@ out tags center 120;`;
       }
 
       const displayedCities = useMemo(() => {
-        let list = [...cities];
+        let list = [...scopedCities];
         if (minTemp > 0) list = list.filter((c) => {
           const t = c.feelsLike != null ? c.feelsLike : c.temp;
           return t != null && t >= minTemp;
@@ -1745,14 +2066,15 @@ out tags center 120;`;
         else if (sortBy === 'clearest') list.sort((a, b) => (a.cloud_cover ?? 999) - (b.cloud_cover ?? 999));
         else if (sortBy === 'sunscore') {
           list.sort((a, b) => {
-            const sa = weatherScore(a), sb = weatherScore(b);
+            const sa = Number.isFinite(Number(a.weatherScore100)) ? Number(a.weatherScore100) : weatherScore(a);
+            const sb = Number.isFinite(Number(b.weatherScore100)) ? Number(b.weatherScore100) : weatherScore(b);
             if (sb !== sa) return sb - sa;
             if (!position) return 0;
             return haversine(position.lat, position.lon, a.lat, a.lon) - haversine(position.lat, position.lon, b.lat, b.lon);
           });
         }
         return list;
-      }, [cities, sortBy, minTemp, maxWindKmh, minWeatherLevel, position]);
+      }, [scopedCities, sortBy, minTemp, maxWindKmh, minWeatherLevel, position]);
 
       const scrollToCardByRank = useCallback((rank) => {
         const cardId = `city-card-${rank}`;
@@ -2159,7 +2481,8 @@ out tags center 120;`;
         setLoading(true);
         setError(null);
         setCities([]);
-        setIsFallbackMode(false);
+        const runtimeScopeContext = buildTimeScopeContext(new Date());
+        setTimeScopeContext(runtimeScopeContext);
 
         const gridMaxPoints = radiusKm >= 140 ? 180 : radiusKm >= 80 ? 160 : 140;
         const grid = generateSearchGrid(position.lat, position.lon, radiusKm, 15, gridMaxPoints);
@@ -2171,148 +2494,96 @@ out tags center 120;`;
 
         function mergeMeteo(points, results) {
           const list = Array.isArray(results) ? results : [results];
-          const now = new Date();
+          const nowMs = runtimeScopeContext.now.getTime();
           return points.map((p, i) => {
             const r = list[i];
             const cur = r?.current || {};
             // Si données météo incomplètes, on ignore ce point (pas de fallback arbitraire)
             if (cur.temperature_2m == null || cur.wind_speed_10m == null || cur.weather_code == null) return null;
             const hourly = r?.hourly || {};
-            const temp = cur.temperature_2m;
-            const wind = cur.wind_speed_10m;
-            const feelsLike = windChill(temp, wind);
             const times = hourly.time || [];
             const temps = hourly.temperature_2m || [];
             const winds = hourly.wind_speed_10m || [];
             const codes = hourly.weather_code || [];
             const precipProbabilities = hourly.precipitation_probability || [];
             const precipAmounts = hourly.precipitation || [];
-            const nowMs = now.getTime();
-            let trendSlots = [];
-            const pushTrendSlot = (label, t, w, code) => {
-              const felt = windChill(t, w);
-              const score = weatherScoreFromSlot(felt ?? t, w, code);
-              trendSlots.push({
-                label,
-                temp: t != null ? Number(t) : null,
-                feelsLike: felt != null ? felt : (t != null ? Number(t) : null),
-                windKmh: w != null ? Number(w) : null,
-                weatherCode: code ?? null,
-                score,
-              });
-              return score;
+            const clouds = hourly.cloud_cover || [];
+            const temp = Number(cur.temperature_2m);
+            const wind = Number(cur.wind_speed_10m);
+            const currentSlot = {
+              tsMs: nowMs,
+              dayKey: toLocalDayKey(runtimeScopeContext.now),
+              hour: runtimeScopeContext.now.getHours(),
+              temp: Number.isFinite(temp) ? temp : null,
+              windKmh: Number.isFinite(wind) ? wind : null,
+              feelsLike: windChill(temp, wind),
+              weatherCode: Number(cur.weather_code),
+              precipitationProbability: null,
+              precipitationAmount: null,
+              cloudCover: Number.isFinite(Number(cur.cloud_cover)) ? Number(cur.cloud_cover) : null,
+              score: weatherScoreFromSlot(windChill(temp, wind) ?? temp, wind, Number(cur.weather_code)),
             };
-
-            const currentScore = pushTrendSlot('Maintenant', temp, wind, cur.weather_code);
-            let precipitationRisk = null;
-            if (Array.isArray(times) && times.length > 0) {
-              const maxIndex = times.length;
-              const twelveHoursMs = 12 * 60 * 60 * 1000;
-              const pastToleranceMs = 30 * 60 * 1000;
-              let windowMaxProb = null;
-              let windowMaxAmount = 0;
-              let windowCodeRisk = precipitationRiskFloorFromCode(cur.weather_code);
-              let nearestIndex = -1;
-              let nearestDiff = Infinity;
-              for (let tIdx = 0; tIdx < maxIndex; tIdx++) {
-                const prob = Number(precipProbabilities[tIdx]);
-                const ts = new Date(times[tIdx]).getTime();
-                if (!Number.isFinite(ts)) continue;
-                const delta = ts - nowMs;
-                if (delta >= -pastToleranceMs && delta <= twelveHoursMs) {
-                  if (Number.isFinite(prob)) {
-                    windowMaxProb = windowMaxProb == null ? prob : Math.max(windowMaxProb, prob);
-                  }
-                  const amount = Number(precipAmounts[tIdx]);
-                  if (Number.isFinite(amount)) {
-                    windowMaxAmount = Math.max(windowMaxAmount, amount);
-                  }
-                  const codeRisk = precipitationRiskFloorFromCode(codes[tIdx]);
-                  if (codeRisk > windowCodeRisk) {
-                    windowCodeRisk = codeRisk;
-                  }
-                }
-                const absDiff = Math.abs(delta);
-                const hasSignal = Number.isFinite(prob) || Number.isFinite(amount);
-                if (hasSignal && absDiff < nearestDiff) {
-                  nearestDiff = absDiff;
-                  nearestIndex = tIdx;
-                }
-              }
-              let derivedRisk = null;
-              if (Number.isFinite(windowMaxProb)) {
-                derivedRisk = Number(windowMaxProb);
-              }
-              if (windowMaxAmount > 0) {
-                const mmRisk = precipitationRiskFromAmount(windowMaxAmount);
-                derivedRisk = derivedRisk == null ? mmRisk : Math.max(derivedRisk, mmRisk);
-              }
-              if (windowCodeRisk > 0) {
-                derivedRisk = derivedRisk == null ? windowCodeRisk : Math.max(derivedRisk, windowCodeRisk);
-              }
-              if (derivedRisk == null && nearestIndex >= 0) {
-                const nearestProb = Number(precipProbabilities[nearestIndex]);
-                if (Number.isFinite(nearestProb)) {
-                  derivedRisk = nearestProb;
-                } else {
-                  const nearestAmount = Number(precipAmounts[nearestIndex]);
-                  if (Number.isFinite(nearestAmount)) {
-                    derivedRisk = precipitationRiskFromAmount(nearestAmount);
-                  }
-                }
-              }
-              if (derivedRisk != null && Number.isFinite(derivedRisk)) {
-                precipitationRisk = Math.max(0, Math.min(100, Math.round(derivedRisk)));
+            const hourlySlots = [];
+            const maxLen = Math.max(times.length, temps.length, winds.length, codes.length);
+            for (let tIdx = 0; tIdx < maxLen; tIdx++) {
+              const ts = new Date(times[tIdx]);
+              const tsMs = ts.getTime();
+              if (!Number.isFinite(tsMs)) continue;
+              const t = Number(temps[tIdx]);
+              const w = Number(winds[tIdx]);
+              const code = Number(codes[tIdx]);
+              if (!Number.isFinite(t) || !Number.isFinite(w) || !Number.isFinite(code)) continue;
+              const feelsLike = windChill(t, w);
+              const probability = Number(precipProbabilities[tIdx]);
+              const amount = Number(precipAmounts[tIdx]);
+              const cloudCover = Number(clouds[tIdx]);
+              hourlySlots.push({
+                tsMs,
+                dayKey: toLocalDayKey(ts),
+                hour: ts.getHours(),
+                temp: t,
+                windKmh: w,
+                feelsLike: feelsLike != null ? feelsLike : t,
+                weatherCode: code,
+                precipitationProbability: Number.isFinite(probability) ? probability : null,
+                precipitationAmount: Number.isFinite(amount) ? amount : null,
+                cloudCover: Number.isFinite(cloudCover) ? cloudCover : null,
+                score: weatherScoreFromSlot(feelsLike ?? t, w, code),
+              });
+            }
+            hourlySlots.sort((a, b) => a.tsMs - b.tsMs);
+            const timeframes = {};
+            for (const option of TIME_SCOPE_OPTIONS) {
+              const info = runtimeScopeContext?.scopes?.[option.key];
+              const scoped = buildScopeForecast(info, hourlySlots, currentSlot, nowMs);
+              if (scoped) {
+                timeframes[option.key] = scoped;
               }
             }
-            let idx = times.findIndex((timeStr) => new Date(timeStr) > now);
-            if (idx === -1) idx = 0;
-            for (let k = 0; k < 4 && idx + k < times.length; k++) {
-              const j = idx + k;
-              const t = temps[j];
-              const w = winds[j];
-              const code = codes[j];
-              const d = new Date(times[j]);
-              const label = Number.isNaN(d.getTime()) ? '—' : d.getHours() + 'h';
-              pushTrendSlot(label, t, w, code);
-            }
-            while (trendSlots.length < 5) {
-              pushTrendSlot(trendSlots[trendSlots.length - 1]?.label || '—', temp, wind, cur.weather_code);
-            }
-            const avgFuture = trendSlots.length > 1
-              ? trendSlots.slice(1).reduce((a, b) => a + (b.score ?? 0), 0) / (trendSlots.length - 1)
-              : currentScore;
-            const improvesSoon = trendSlots.length > 1 && (avgFuture >= currentScore * 1.2);
-            const peakIndex = trendSlots.length > 0
-              ? trendSlots.reduce((best, slot, idx) => (slot.score > trendSlots[best].score ? idx : best), 0)
-              : 0;
-            const showPeak = peakIndex > 0 && trendSlots[peakIndex].score > currentScore + 10;
+            const baseFrame = timeframes.today || timeframes.tomorrow || timeframes.weekend;
+            if (!baseFrame) return null;
+            const selectionScore = Object.values(timeframes)
+              .map((frame) => Number(frame?.weatherScore100))
+              .filter((value) => Number.isFinite(value))
+              .reduce((max, value) => Math.max(max, value), Number(baseFrame.weatherScore100) || 0);
 
             return {
               id: `grid-${i}`,
               name: `Zone ${i + 1}`,
               type: 'zone',
               ...p,
-              temp,
-              feelsLike: feelsLike != null ? feelsLike : temp,
-              weather_code: cur.weather_code,
-              wind_speed: wind,
-              precipitation_risk: precipitationRisk,
-              cloud_cover: cur.cloud_cover,
+              ...baseFrame,
+              timeframes,
               _dist: haversine(position.lat, position.lon, p.lat, p.lon),
-              weatherScore100: currentScore,
-              trendSlots: trendSlots.slice(0, 5),
-              hourlyTrend: trendSlots.slice(0, 5).map((s) => s.score),
-              trendTimes: trendSlots.slice(0, 5).map((s) => s.label),
-              improvesSoon: !!improvesSoon,
-              peakIndex: showPeak ? peakIndex : -1,
+              _selectionScore: selectionScore,
             };
           }).filter(Boolean);
         }
 
         try {
           const baseUrl = 'https://api.open-meteo.com/v1/forecast';
-          const params = 'current=temperature_2m,weather_code,wind_speed_10m,cloud_cover&hourly=temperature_2m,weather_code,wind_speed_10m,precipitation_probability,precipitation&forecast_days=1&timezone=auto';
+          const forecastDays = runtimeScopeContext?.forecastDays || 2;
+          const params = `current=temperature_2m,weather_code,wind_speed_10m,cloud_cover&hourly=temperature_2m,weather_code,wind_speed_10m,cloud_cover,precipitation_probability,precipitation&forecast_days=${forecastDays}&timezone=auto`;
           const METEO_BATCH_SIZE = 48;
           const METEO_MIN_BATCH_SIZE = 12;
           const METEO_CHUNK_DELAY_MS = 280;
@@ -2397,7 +2668,7 @@ out tags center 120;`;
           if (scored.length === 0) throw new Error('Aucune donnée météo exploitable dans le rayon.');
           if (!rateLimited) clearMeteoRateLimitUntil();
           const byScoreThenDist = (a, b) => {
-            const sDiff = (b.weatherScore100 ?? 0) - (a.weatherScore100 ?? 0);
+            const sDiff = (b._selectionScore ?? b.weatherScore100 ?? 0) - (a._selectionScore ?? a.weatherScore100 ?? 0);
             if (sDiff !== 0) return sDiff;
             return (a._dist ?? 0) - (b._dist ?? 0);
           };
@@ -2437,7 +2708,6 @@ out tags center 120;`;
             .map((p, i) => ({ ...p, id: p.id || `zone-${i}` }))
             .sort(byScoreThenDist);
           if (!isCurrentSearch()) return;
-          setIsFallbackMode(finalList.filter((c) => SUN_CODES.includes(c.weather_code)).length === 0 && finalList.length > 0);
           setCities(finalList);
           finishIfCurrent();
         } catch (err) {
@@ -2506,8 +2776,11 @@ out tags center 120;`;
             ? Math.round(city.feelsLike)
             : (city.temp != null ? Math.round(city.temp) : null);
           const roundedWind = city.wind_speed != null ? Math.round(city.wind_speed) : null;
-          const mapBadgeLabel = `${getWeatherIcon(city.weather_code)} ${roundedFeels != null ? `${roundedFeels}°` : '—'} - ${roundedWind != null ? `${roundedWind} kmh` : '— kmh'}`;
+          const mapBadgeLabel = city.mapBadgeLabel || `${getWeatherIcon(city.weather_code)} ${roundedFeels != null ? `${roundedFeels}°` : '—'} - ${roundedWind != null ? `${roundedWind} kmh` : '— kmh'}`;
           const popupTempLabel = roundedFeels != null ? ` • ressenti ${roundedFeels}°` : '';
+          const popupScopeLabel = city.weekendSummary
+            ? ` • ${city.weekendSummary}`
+            : (city.bestSlotLabel ? ` • ${(city.scopeLabel ? `${city.scopeLabel} ` : '')}${city.bestSlotLabel}` : '');
           const m = L.marker([city.lat, city.lon], {
             icon: L.divIcon({
               className: 'sunapp-map-point-icon',
@@ -2526,7 +2799,7 @@ out tags center 120;`;
               className: 'sunapp-map-badge',
               opacity: 1,
             })
-            .bindPopup(`${rank}. ${city.name} — ${score5}/5${popupTempLabel}`);
+            .bindPopup(`${rank}. ${city.name} — ${score5}/5${popupTempLabel}${popupScopeLabel}`);
           m.on('click', () => {
             setSelectedCity(city);
             scrollToCardByRank(rank);
@@ -2555,7 +2828,8 @@ out tags center 120;`;
         : positionSource === 'saved'
           ? 'GPS non disponible: dernière position enregistrée utilisée.'
           : 'GPS non disponible: position de secours utilisée.';
-      const destinationLabel = cities.length === 1 ? '1 zone trouvée' : `${cities.length} zones trouvées`;
+      const destinationLabel = scopedCities.length === 1 ? '1 zone trouvée' : `${scopedCities.length} zones trouvées`;
+      const activeScopeReliability = activeScopeInfo?.reliability || FORECAST_RELIABILITY_META.high;
 
       return (
         <div className="min-h-screen p-4 md:p-6 bg-sky-50">
@@ -2563,6 +2837,33 @@ out tags center 120;`;
             <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
               <IconSun className="text-amber-500" /> SunApp
             </h1>
+            <div className="mt-3 bg-white border border-slate-100 rounded-2xl p-3 shadow-sm">
+              <p className="text-xs uppercase tracking-wide text-slate-500 font-semibold mb-2">Quand ?</p>
+              <div className="grid grid-cols-3 gap-2">
+                {scopeTabs.map((tab) => {
+                  const isActive = tab.key === timeScope;
+                  return (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      onClick={() => setTimeScope(tab.key)}
+                      className={`rounded-xl px-3 py-2.5 text-sm font-semibold border transition ${isActive ? 'bg-sky-500 text-white border-sky-500 shadow-sm' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'}`}
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-slate-600">
+                  Fenêtre de scoring {WINDOW_START_HOUR}h-{WINDOW_END_HOUR}h • {activeScopeInfo?.dateHint || ''}
+                </span>
+                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border ${activeScopeReliability.className}`}>
+                  <span aria-hidden="true">{activeScopeReliability.icon}</span>
+                  <span>{activeScopeReliability.label}</span>
+                </span>
+              </div>
+            </div>
           </header>
 
           {pwaUpdateInfo && (
@@ -2738,15 +3039,15 @@ out tags center 120;`;
           <div className="bg-white rounded-2xl shadow-lg border border-slate-100 overflow-hidden">
             <div className="bg-[#36A7EB] text-white px-6 py-4 rounded-t-2xl">
               <h2 className="text-lg font-bold">
-                {isFallbackMode ? 'Zones météo (aucun point ensoleillé)' : `Zones météo près de ${locationTitle}`}
+                {isFallbackMode ? `Zones météo (${activeScopeInfo?.label || "Aujourd'hui"})` : `Zones météo près de ${locationTitle} • ${activeScopeInfo?.label || "Aujourd'hui"}`}
               </h2>
               <p className="text-sm text-white/90 mt-0.5">
                 {loading && position
                   ? 'Recherche en cours…'
-                  : cities.length === 0 && !error
+                  : scopedCities.length === 0 && !error
                     ? 'Appuyez sur Rechercher pour lancer une recherche.'
-                    : (displayedCities.length !== cities.length ? `${destinationLabel} — ${displayedCities.length} affichés` : destinationLabel)}
-                {isFallbackMode && cities.length > 0 && ' — triés du moins nuageux au plus proche'}
+                    : (displayedCities.length !== scopedCities.length ? `${destinationLabel} — ${displayedCities.length} affichés` : destinationLabel)}
+                {isFallbackMode && scopedCities.length > 0 && ' — triés du moins nuageux au plus proche'}
               </p>
             </div>
             <div className="p-4 md:p-6">
@@ -2756,7 +3057,7 @@ out tags center 120;`;
                 </div>
               ) : (
                 <>
-                  {cities.length > 0 && (
+                  {scopedCities.length > 0 && (
                     <label className="flex items-center gap-2 mb-4 text-slate-600 text-sm font-medium">
                       Trier par :
                       <select
@@ -2786,12 +3087,12 @@ out tags center 120;`;
                       />
                     ))}
                   </div>
-                  {!loading && position && cities.length > 0 && displayedCities.length === 0 && (
+                  {!loading && position && scopedCities.length > 0 && displayedCities.length === 0 && (
                     <p className="text-slate-500 text-center py-6">Aucun lieu ne correspond aux filtres.</p>
                   )}
                 </>
               )}
-              {!loading && position && cities.length === 0 && !error && (
+              {!loading && position && scopedCities.length === 0 && !error && (
                 <p className="text-slate-500 text-center py-8">Aucune zone trouvée. Augmentez le rayon.</p>
               )}
             </div>
