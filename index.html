@@ -175,7 +175,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 19h15';
+    const APP_BUILD = '04/03/2026 - 19h18';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -849,17 +849,8 @@ out tags center 120;`;
       const bestIndex = peakIndex >= 0
         ? peakIndex
         : slots.reduce((best, s, i) => (s.score > slots[best].score ? i : best), 0);
-      const bestSlot = slots[bestIndex] || slots[0];
-      const bestSlotLabel = bestSlot?.label === 'Maintenant'
-        ? `${new Date().getHours()}h`
-        : (bestSlot?.label || '—');
       return (
         <div className="w-full">
-          {bestSlot && (
-            <p className="text-xs text-slate-600 mb-2">
-              Meilleur créneau: <span className="font-semibold text-slate-800">{bestSlotLabel}</span>
-            </p>
-          )}
           <div className="flex gap-2 overflow-x-auto pb-1 snap-x snap-mandatory">
             {slots.slice(0, 5).map((slot, i) => {
               const isBest = i === bestIndex;
