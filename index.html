@@ -4,7 +4,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SunApp — Trouvez le soleil</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>☀️</text></svg>" />
+  <meta name="description" content="SunApp vous aide à trouver rapidement les zones les plus ensoleillées autour de vous." />
+  <meta name="theme-color" content="#36A7EB" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="SunApp" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="./public/icons/icon-192.svg" />
+  <link rel="apple-touch-icon" href="./public/icons/icon-192.svg" />
   <!-- Tailwind via CDN (avertissement prod : préférer build PostCSS/CLI) -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -127,7 +135,105 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 17h20';
+    const APP_BUILD = '04/03/2026 - 17h31';
+    const PWA_VERSION_ENDPOINT = './version.json';
+    const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
+    const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
+    const PWA_SW_UPDATE_INTERVAL_MS = 60 * 60 * 1000;
+
+    function versionSignature(version, build) {
+      const v = String(version || '').trim();
+      const b = String(build || '').trim();
+      return `${v}::${b}`;
+    }
+
+    async function fetchRemoteVersionMeta(signal) {
+      try {
+        const res = await fetch(`${PWA_VERSION_ENDPOINT}?t=${Date.now()}`, {
+          cache: 'no-store',
+          signal,
+        });
+        if (!res.ok) return null;
+        const remote = await res.json();
+        const remoteSig = versionSignature(remote?.version, remote?.build);
+        const localSig = versionSignature(APP_VERSION, APP_BUILD);
+        if (!remoteSig || remoteSig === localSig) return null;
+        return remote;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    async function initServiceWorkerRuntime({ onUpdateReady, onOfflineReady }) {
+      if (!('serviceWorker' in navigator)) {
+        return { registration: null, dispose: () => {} };
+      }
+      let reloading = false;
+      const onControllerChange = () => {
+        if (reloading) return;
+        reloading = true;
+        window.location.reload();
+      };
+      const onMessage = (event) => {
+        if (event?.data?.type === 'SUNAPP_SW_OFFLINE_READY') {
+          onOfflineReady?.({ source: 'message' });
+        }
+      };
+      navigator.serviceWorker.addEventListener('controllerchange', onControllerChange);
+      navigator.serviceWorker.addEventListener('message', onMessage);
+
+      try {
+        const registration = await navigator.serviceWorker.register(PWA_SW_URL, { scope: './' });
+        window.__sunappSwRegistration = registration;
+
+        const markUpdateReady = (source) => onUpdateReady?.({ source, registration });
+        const markOfflineReady = (source) => onOfflineReady?.({ source, registration });
+
+        if (registration.waiting) markUpdateReady('waiting');
+        registration.addEventListener('updatefound', () => {
+          const installing = registration.installing;
+          if (!installing) return;
+          installing.addEventListener('statechange', () => {
+            if (installing.state !== 'installed') return;
+            if (navigator.serviceWorker.controller) markUpdateReady('updatefound');
+            else markOfflineReady('installed');
+          });
+        });
+        registration.update().catch(() => {});
+        const updateTimer = window.setInterval(() => {
+          registration.update().catch(() => {});
+        }, PWA_SW_UPDATE_INTERVAL_MS);
+        return {
+          registration,
+          dispose: () => {
+            navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange);
+            navigator.serviceWorker.removeEventListener('message', onMessage);
+            window.clearInterval(updateTimer);
+          },
+        };
+      } catch (_) {
+        return {
+          registration: null,
+          dispose: () => {
+            navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange);
+            navigator.serviceWorker.removeEventListener('message', onMessage);
+          },
+        };
+      }
+    }
+
+    async function activateWaitingServiceWorker() {
+      const registration = window.__sunappSwRegistration;
+      if (!registration) return false;
+      try {
+        await registration.update();
+      } catch (_) {}
+      if (registration.waiting) {
+        registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+        return true;
+      }
+      return false;
+    }
 
     // ---------- Utilitaires ----------
     function haversine(lat1, lon1, lat2, lon2) {
@@ -736,6 +842,10 @@
       const [minTemp, setMinTemp] = useState(0);
       const [maxWindKmh, setMaxWindKmh] = useState(0);
       const [minWeatherLevel, setMinWeatherLevel] = useState(0);
+      const [pwaUpdateInfo, setPwaUpdateInfo] = useState(null);
+      const [pwaOfflineReady, setPwaOfflineReady] = useState(false);
+      const [isApplyingPwaUpdate, setIsApplyingPwaUpdate] = useState(false);
+      const [installPromptEvent, setInstallPromptEvent] = useState(null);
       const mapRef = useRef(null);
       const mapInstanceRef = useRef(null);
       const markersRef = useRef([]);
@@ -893,6 +1003,87 @@
       useEffect(() => {
         requestUserGeolocation();
       }, [requestUserGeolocation]);
+
+      const installPwa = useCallback(async () => {
+        if (!installPromptEvent) return;
+        try {
+          installPromptEvent.prompt();
+          await installPromptEvent.userChoice;
+        } catch (_) {
+          // no-op
+        } finally {
+          setInstallPromptEvent(null);
+        }
+      }, [installPromptEvent]);
+
+      const applyPwaUpdate = useCallback(async () => {
+        setIsApplyingPwaUpdate(true);
+        try {
+          const switched = await activateWaitingServiceWorker();
+          if (!switched) window.location.reload();
+        } catch (_) {
+          window.location.reload();
+        }
+      }, []);
+
+      useEffect(() => {
+        const onBeforeInstallPrompt = (event) => {
+          event.preventDefault();
+          setInstallPromptEvent(event);
+        };
+        const onInstalled = () => {
+          setInstallPromptEvent(null);
+        };
+        window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+        window.addEventListener('appinstalled', onInstalled);
+        return () => {
+          window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+          window.removeEventListener('appinstalled', onInstalled);
+        };
+      }, []);
+
+      useEffect(() => {
+        let cancelled = false;
+        let disposeSw = () => {};
+        let versionTimer = null;
+
+        const checkVersion = async () => {
+          const remote = await fetchRemoteVersionMeta();
+          if (cancelled || !remote) return;
+          setPwaUpdateInfo({
+            source: 'version',
+            version: remote.version || null,
+            build: remote.build || null,
+            updatedAt: remote.updatedAt || null,
+          });
+        };
+
+        (async () => {
+          const swRuntime = await initServiceWorkerRuntime({
+            onUpdateReady: () => {
+              if (cancelled) return;
+              setPwaUpdateInfo((prev) => prev || { source: 'sw' });
+            },
+            onOfflineReady: () => {
+              if (cancelled) return;
+              setPwaOfflineReady(true);
+            },
+          });
+          if (cancelled) {
+            swRuntime.dispose?.();
+            return;
+          }
+          disposeSw = swRuntime.dispose || (() => {});
+        })();
+
+        checkVersion();
+        versionTimer = window.setInterval(checkVersion, PWA_VERSION_CHECK_INTERVAL_MS);
+        return () => {
+          cancelled = true;
+          disposeSw();
+          if (versionTimer) window.clearInterval(versionTimer);
+        };
+      }, []);
 
       // Recherche météo par maillage (grille dans le rayon) + Open-Meteo batch + API Géo
       async function runSearch() {
@@ -1178,6 +1369,62 @@
               <IconSun className="text-amber-500" /> SunApp
             </h1>
           </header>
+
+          {pwaUpdateInfo && (
+            <div className="mb-4 bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="text-amber-900">
+                <p className="text-sm font-semibold">Nouvelle version disponible.</p>
+                <p className="text-xs text-amber-800 mt-1">
+                  {pwaUpdateInfo.version || pwaUpdateInfo.build
+                    ? `Version ${pwaUpdateInfo.version || 'n/a'} • Build ${pwaUpdateInfo.build || 'n/a'}`
+                    : 'Rechargez l’application pour activer la mise à jour.'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={applyPwaUpdate}
+                  disabled={isApplyingPwaUpdate}
+                  className="px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-60"
+                >
+                  {isApplyingPwaUpdate ? 'Mise à jour…' : 'Mettre à jour'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPwaUpdateInfo(null)}
+                  className="px-3 py-1.5 rounded-lg border border-amber-300 text-amber-800 text-sm font-medium hover:bg-amber-100"
+                >
+                  Plus tard
+                </button>
+              </div>
+            </div>
+          )}
+
+          {pwaOfflineReady && (
+            <div className="mb-4 bg-emerald-50 border border-emerald-200 rounded-2xl p-3 flex items-center justify-between gap-3">
+              <p className="text-sm text-emerald-800">Mode hors ligne prêt: SunApp est installé en cache local.</p>
+              <button
+                type="button"
+                onClick={() => setPwaOfflineReady(false)}
+                className="px-3 py-1 rounded-lg border border-emerald-300 text-emerald-700 text-sm font-medium hover:bg-emerald-100"
+              >
+                OK
+              </button>
+            </div>
+          )}
+
+          {installPromptEvent && (
+            <div className="mb-4 bg-sky-50 border border-sky-200 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-sky-800">Installer SunApp sur l’écran d’accueil pour un accès plus rapide.</p>
+              <button
+                type="button"
+                onClick={installPwa}
+                className="px-3 py-1.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600"
+              >
+                Installer l’app
+              </button>
+            </div>
+          )}
 
           <div className="mb-4 bg-white rounded-2xl shadow-md border border-slate-100 p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
