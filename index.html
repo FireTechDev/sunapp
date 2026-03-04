@@ -362,6 +362,8 @@
       const showFeelsLikeAlert = feelsLikeGap > 3;
       const malusSoleil = !hasSun;
       const showWindExplanation = windScoreValue < 40;
+      const hasGenericName = /^Zone\s+\d+$/i.test(city.name || '');
+      const cardTitle = hasGenericName ? 'Spot ensoleille' : city.name;
 
       return (
         <div
@@ -396,17 +398,18 @@
                 />
               ) : null}
               {!placeImageUrl && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-sky-100 to-sky-200 text-sky-700">
-                  <IconMapPin className="w-10 h-10 mb-2 opacity-80" />
-                  <span className="text-sm font-medium">{city.name}</span>
-                  <span className="text-xs text-sky-600 mt-0.5">Photo non disponible</span>
+                <div className={`absolute inset-0 flex flex-col items-center justify-center text-center px-4 ${hasSun ? 'bg-gradient-to-br from-amber-100 via-orange-100 to-sky-100 text-orange-800' : 'bg-gradient-to-br from-slate-100 via-slate-200 to-sky-100 text-slate-700'}`}>
+                  <div className="text-3xl mb-2">{hasSun ? '🌤️' : '⛅'}</div>
+                  <span className="text-sm font-semibold">{cardTitle}</span>
+                  <span className="text-xs mt-1 opacity-90">{weatherLabel} • {driveLabel}</span>
+                  <span className="text-xs mt-1 opacity-75">Selection meteo recommandee</span>
                 </div>
               )}
             </div>
           </div>
 
           <div className="p-4 pt-3">
-            <h3 className="text-xl font-bold text-slate-800">{city.name}</h3>
+            <h3 className="text-xl font-bold text-slate-800">{cardTitle}</h3>
             {city.type && <p className="text-xs text-sky-600 font-medium mt-0.5">{getPlaceTypeLabel(city.type)}</p>}
 
             {/* Ligne : distance, temps voiture, lien itinéraire | météo */}
@@ -594,6 +597,21 @@
       }
 
       async function reverseGeocodeFrBatch(points) {
+        const directionLabel = (fromLat, fromLon, toLat, toLon) => {
+          const dLon = ((toLon - fromLon) * Math.PI) / 180;
+          const y = Math.sin(dLon) * Math.cos((toLat * Math.PI) / 180);
+          const x = Math.cos((fromLat * Math.PI) / 180) * Math.sin((toLat * Math.PI) / 180)
+            - Math.sin((fromLat * Math.PI) / 180) * Math.cos((toLat * Math.PI) / 180) * Math.cos(dLon);
+          const brng = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+          const dirs = ['Nord', 'Nord-Est', 'Est', 'Sud-Est', 'Sud', 'Sud-Ouest', 'Ouest', 'Nord-Ouest'];
+          return dirs[Math.round(brng / 45) % 8];
+        };
+        const fallbackLabel = (p, idx) => {
+          if (!position) return `Spot meteo ${idx + 1}`;
+          const dist = Math.max(1, Math.round(haversine(position.lat, position.lon, p.lat, p.lon)));
+          const dir = directionLabel(position.lat, position.lon, p.lat, p.lon);
+          return `Spot ${dir} (${dist} km)`;
+        };
         const lookupOne = async (p, idx) => {
           const url = `https://api-adresse.data.gouv.fr/reverse/?lon=${p.lon}&lat=${p.lat}`;
           try {
@@ -602,7 +620,7 @@
             const data = await res.json();
             const feat = data?.features?.[0];
             const props = feat?.properties || {};
-            const label = props.city || props.name || props.label || `Zone ${idx + 1}`;
+            const label = props.city || props.name || props.label || fallbackLabel(p, idx);
             return { ...p, name: label, type: props.type || 'zone' };
           } catch (e) {
             return null;
@@ -611,7 +629,7 @@
         const out = [];
         for (let i = 0; i < points.length; i++) {
           const item = await lookupOne(points[i], i);
-          out.push(item || { ...points[i], name: `Zone ${i + 1}`, type: 'zone' });
+          out.push(item || { ...points[i], name: fallbackLabel(points[i], i), type: 'zone' });
         }
         return out;
       }
