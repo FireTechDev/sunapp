@@ -149,7 +149,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 17h50';
+    const APP_BUILD = '04/03/2026 - 17h59';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -1343,7 +1343,7 @@
           const roundedFeels = city.feelsLike != null
             ? Math.round(city.feelsLike)
             : (city.temp != null ? Math.round(city.temp) : null);
-          const mapBadgeLabel = `#${rank} ${getWeatherIcon(city.weather_code)} ${roundedFeels != null ? `${roundedFeels}°` : '—'}`;
+          const mapBadgeLabel = `${rank} ${getWeatherIcon(city.weather_code)} ${roundedFeels != null ? `${roundedFeels}°` : '—'}`;
           const popupTempLabel = roundedFeels != null ? ` • ressenti ${roundedFeels}°` : '';
           const m = L.circleMarker([city.lat, city.lon], {
             radius: radiusPx,
