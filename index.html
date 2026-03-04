@@ -175,7 +175,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 20h36';
+    const APP_BUILD = '04/03/2026 - 20h41';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -979,8 +979,8 @@ out tags center 120;`;
     const IconClock = (props) => (
       <svg {...props} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
     );
-    const IconCloudRain = (props) => (
-      <svg {...props} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 13a4 4 0 0 0-.2-8 6 6 0 1 0-11.6 1A4 4 0 0 0 4 14h12"/><path d="M16 14v6"/><path d="M20 14v6"/><path d="M12 16v6"/></svg>
+    const IconDroplet = (props) => (
+      <svg {...props} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/></svg>
     );
     const IconCamera = (props) => (
       <svg {...props} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
@@ -1375,7 +1375,6 @@ out tags center 120;`;
             <div className="flex flex-wrap gap-4 mt-4 pt-3 border-t border-slate-100">
               <div className="flex items-center gap-1.5">
                 <span className="text-base leading-none" aria-hidden="true">{getWeatherIcon(city.weather_code)}</span>
-                <span className="text-slate-700 font-medium">{weatherLabel}</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <IconThermometer className="w-5 h-5 text-orange-500 shrink-0" />
@@ -1384,15 +1383,15 @@ out tags center 120;`;
                 </span>
               </div>
               <div className="flex items-center gap-1.5">
-                <IconCloudRain className="w-5 h-5 text-sky-500 shrink-0" />
+                <IconDroplet className="w-5 h-5 text-sky-500 shrink-0" />
                 <span className="text-slate-700">
-                  {city.precipitation_risk != null ? `${city.precipitation_risk} % pluie` : 'Risque pluie —'}
+                  {city.precipitation_risk != null ? `${city.precipitation_risk} %` : '—'}
                 </span>
               </div>
               <div className="flex items-center gap-1.5">
                 <IconWind className={`w-5 h-5 shrink-0 ${windAlert ? 'text-orange-500' : 'text-slate-400'}`} />
                 <span className={windAlert ? 'font-bold text-orange-600' : 'text-slate-700'}>
-                  {city.wind_speed != null ? `${Number(city.wind_speed).toFixed(1)} km/h` : '—'}
+                  {city.wind_speed != null ? `${Math.round(Number(city.wind_speed))} km/h` : '—'}
                 </span>
               </div>
             </div>
@@ -2161,24 +2160,33 @@ out tags center 120;`;
             const currentScore = pushTrendSlot('Maintenant', temp, wind, cur.weather_code);
             let precipitationRisk = null;
             if (Array.isArray(times) && Array.isArray(precipProbabilities) && times.length > 0 && precipProbabilities.length > 0) {
-              let bestIndex = -1;
-              let bestDiff = Infinity;
               const maxIndex = Math.min(times.length, precipProbabilities.length);
+              const sixHoursMs = 6 * 60 * 60 * 1000;
+              const pastToleranceMs = 30 * 60 * 1000;
+              let windowMax = null;
+              let nearestIndex = -1;
+              let nearestDiff = Infinity;
               for (let tIdx = 0; tIdx < maxIndex; tIdx++) {
                 const prob = Number(precipProbabilities[tIdx]);
                 if (!Number.isFinite(prob)) continue;
                 const ts = new Date(times[tIdx]).getTime();
                 if (!Number.isFinite(ts)) continue;
-                const diff = Math.abs(ts - nowMs);
-                if (diff < bestDiff) {
-                  bestDiff = diff;
-                  bestIndex = tIdx;
+                const delta = ts - nowMs;
+                if (delta >= -pastToleranceMs && delta <= sixHoursMs) {
+                  windowMax = windowMax == null ? prob : Math.max(windowMax, prob);
+                }
+                const absDiff = Math.abs(delta);
+                if (absDiff < nearestDiff) {
+                  nearestDiff = absDiff;
+                  nearestIndex = tIdx;
                 }
               }
-              if (bestIndex >= 0) {
-                const prob = Number(precipProbabilities[bestIndex]);
-                if (Number.isFinite(prob)) {
-                  precipitationRisk = Math.max(0, Math.min(100, Math.round(prob)));
+              if (Number.isFinite(windowMax)) {
+                precipitationRisk = Math.max(0, Math.min(100, Math.round(windowMax)));
+              } else if (nearestIndex >= 0) {
+                const nearestProb = Number(precipProbabilities[nearestIndex]);
+                if (Number.isFinite(nearestProb)) {
+                  precipitationRisk = Math.max(0, Math.min(100, Math.round(nearestProb)));
                 }
               }
             }
