@@ -127,7 +127,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 17h16';
+    const APP_BUILD = '04/03/2026 - 17h19';
 
     // ---------- Utilitaires ----------
     function haversine(lat1, lon1, lat2, lon2) {
@@ -525,10 +525,7 @@
       const weatherScore = getWeatherScore(city);
       const windScoreValue = getWindScoreValue(city.wind_speed);
       const windAlert = windScoreValue < 50;
-      const temp = city.temp;
       const feelsLike = city.feelsLike ?? city.temp;
-      const feelsLikeGap = (temp != null && feelsLike != null) ? Math.abs(temp - feelsLike) : 0;
-      const showFeelsLikeAlert = feelsLikeGap > 3;
       const malusSoleil = !hasSun;
       const showWindExplanation = windScoreValue < 40;
       const hasGenericName = /^Zone\s+\d+$/i.test(city.name || '');
@@ -679,19 +676,7 @@
               <div className="flex items-center gap-1.5">
                 <IconThermometer className="w-5 h-5 text-orange-500 shrink-0" />
                 <span className="text-slate-700 font-medium">
-                  {city.temp != null ? (
-                    showFeelsLikeAlert ? (
-                      <>
-                        <span className="text-lg font-bold text-slate-800">{Number(feelsLike).toFixed(1)} °C</span>
-                        <span className="text-slate-500 text-sm ml-1">(réel {Number(city.temp).toFixed(1)} °C)</span>
-                        <span className="ml-1.5 text-xs font-medium text-sky-600 bg-sky-50 px-1.5 py-0.5 rounded">
-                          {feelsLike < (city.temp ?? 0) ? 'Effet de vent' : 'Frais'}
-                        </span>
-                      </>
-                    ) : city.feelsLike != null
-                      ? `${Number(city.temp).toFixed(1)} °C (ressenti ${Number(city.feelsLike).toFixed(1)} °C)`
-                      : `${Number(city.temp).toFixed(1)} °C`
-                  ) : '—'}
+                  {feelsLike != null ? `${Math.round(feelsLike)}° (ressentie)` : '—'}
                 </span>
               </div>
               <div className="flex items-center gap-1.5">
