@@ -149,7 +149,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 18h01';
+    const APP_BUILD = '04/03/2026 - 18h05';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -601,7 +601,7 @@
       );
     }
 
-    function CityCard({ city, userLat, userLon, onShowOnMap, isRecommended }) {
+    function CityCard({ city, userLat, userLon, onShowOnMap, isRecommended, rank }) {
       const [photoSlides, setPhotoSlides] = useState([]);
       const [photoIndex, setPhotoIndex] = useState(0);
 
@@ -760,7 +760,14 @@
           </div>
 
           <div className="p-4 pt-3">
-            <h3 className="text-xl font-bold text-slate-800">{cardTitle}</h3>
+            <div className="flex items-center gap-2">
+              {rank != null && (
+                <span className="inline-flex items-center justify-center min-w-[26px] h-6 px-2 rounded-full bg-sky-100 text-sky-700 text-sm font-bold">
+                  {rank}
+                </span>
+              )}
+              <h3 className="text-xl font-bold text-slate-800">{cardTitle}</h3>
+            </div>
             {city.type && <p className="text-xs text-sky-600 font-medium mt-0.5">{getPlaceTypeLabel(city.type)}</p>}
 
             {/* Ligne : distance, temps voiture, lien itinéraire | météo */}
@@ -1593,6 +1600,7 @@
                       <CityCard
                         key={city.id}
                         city={city}
+                        rank={idx + 1}
                         userLat={position?.lat}
                         userLon={position?.lon}
                         onShowOnMap={setSelectedCity}
