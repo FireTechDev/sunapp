@@ -175,7 +175,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 19h07';
+    const APP_BUILD = '04/03/2026 - 19h13';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -403,8 +403,10 @@
     const MAX_CARD_PHOTOS = 3;
     const MAX_CARD_POIS = 3;
     const POI_SEARCH_RADIUS_M = 15000;
+    const POI_WIKI_RADIUS_M = 4000;
     const CARD_PHOTO_CACHE = new Map();
     const CARD_POI_CACHE = new Map();
+    const CARD_POI_PREVIEW_CACHE = new Map();
     const NON_SCENIC_TITLE_HINTS = /\b(map|carte|plan|logo|flag|drapeau|blason|coat[_ -]?of[_ -]?arms|symbol|diagram|locator|location map|svg|liste de|chronologie|histoire de)\b/i;
     const PERSON_DESCRIPTION_HINTS = /\b(acteur|actrice|chanteur|chanteuse|joueur|joueuse|footballeur|rugbyman|cycliste|peintre|écrivain|politique|député|maire|avocat|journaliste|personnalité|biographie|né en|née en|mort en|morte en|human)\b/i;
     const PLACE_DESCRIPTION_HINTS = /\b(commune|village|hameau|quartier|eglise|chateau|mont|lac|riviere|foret|parc|plage|vallee|reserve|gorges|site naturel|monument|abbaye|cathedrale|basilique|musee|pont|canal|place)\b/i;
@@ -416,6 +418,58 @@
 
     function getCardPoiCacheKey(lat, lon) {
       return `poi:${Number(lat).toFixed(4)},${Number(lon).toFixed(4)}`;
+    }
+
+    function getPoiPreviewCacheKey(poi) {
+      return [
+        poi?.osmType || 'poi',
+        poi?.osmId || 0,
+        Number(poi?.lat ?? 0).toFixed(5),
+        Number(poi?.lon ?? 0).toFixed(5),
+        normalizeText(poi?.name || ''),
+      ].join(':');
+    }
+
+    function normalizeExternalUrl(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      if (/^https?:\/\//i.test(raw)) return raw;
+      if (/^[a-z0-9.-]+\.[a-z]{2,}(?:[/?#]|$)/i.test(raw)) return `https://${raw}`;
+      return '';
+    }
+
+    function compactPoiText(value, maxLen = 180) {
+      const text = String(value || '').replace(/\s+/g, ' ').trim();
+      if (!text) return '';
+      return text.length > maxLen ? `${text.slice(0, maxLen - 1)}…` : text;
+    }
+
+    function parseWikiTitleFromTag(wikiTag) {
+      const raw = String(wikiTag || '').trim();
+      if (!raw) return '';
+      if (/^https?:\/\//i.test(raw)) {
+        try {
+          const url = new URL(raw);
+          const titleFromUrl = decodeURIComponent((url.pathname.split('/').pop() || '').replace(/_/g, ' '));
+          return titleFromUrl.trim();
+        } catch (_) {
+          return '';
+        }
+      }
+      const colonIdx = raw.indexOf(':');
+      const token = colonIdx >= 0 ? raw.slice(colonIdx + 1) : raw;
+      try {
+        return decodeURIComponent(token.replace(/_/g, ' ')).trim();
+      } catch (_) {
+        return token.replace(/_/g, ' ').trim();
+      }
+    }
+
+    function getPoiOsmUrl(poi) {
+      if (poi?.osmType && poi?.osmId) {
+        return `https://www.openstreetmap.org/${poi.osmType}/${poi.osmId}`;
+      }
+      return `https://www.openstreetmap.org/?mlat=${poi.lat}&mlon=${poi.lon}#map=15/${poi.lat}/${poi.lon}`;
     }
 
     function getPoiCategory(tags = {}) {
@@ -541,12 +595,124 @@ out tags center 120;`;
           lat: Number(poiLat.toFixed(5)),
           lon: Number(poiLon.toFixed(5)),
           distanceM,
+          osmType: ['node', 'way', 'relation'].includes(el?.type) ? el.type : '',
+          osmId: Number.isFinite(Number(el?.id)) ? Number(el.id) : null,
           categoryKey: category.key,
           categoryLabel: category.label,
           emoji: category.emoji,
+          tags: {
+            website: String(tags.website || tags.url || tags['contact:website'] || '').trim(),
+            opening_hours: String(tags.opening_hours || '').trim(),
+            phone: String(tags.phone || tags['contact:phone'] || '').trim(),
+            description: String(tags.description || tags.note || '').trim(),
+            wikipedia: String(tags.wikipedia || '').trim(),
+            tourism: String(tags.tourism || '').trim(),
+            leisure: String(tags.leisure || '').trim(),
+            historic: String(tags.historic || '').trim(),
+            natural: String(tags.natural || '').trim(),
+          },
         });
       }
       return pois.sort((a, b) => (a.distanceM ?? Infinity) - (b.distanceM ?? Infinity)).slice(0, 40);
+    }
+
+    function extractWikiSummaryPage(payload) {
+      const pages = Object.values(payload?.query?.pages || {});
+      const page = pages[0];
+      if (!page || page.missing != null) return null;
+      const title = String(page.title || '').trim();
+      const summary = compactPoiText(page.extract || '', 320);
+      const imageUrl = String(page?.thumbnail?.source || '').trim();
+      const wikiUrl = String(page?.fullurl || '').trim() || (title ? `https://fr.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}` : '');
+      if (!title && !summary && !imageUrl) return null;
+      return { title, summary, imageUrl, wikiUrl };
+    }
+
+    async function fetchWikiSummaryByTitle(title, signal) {
+      const cleanTitle = String(title || '').trim();
+      if (!cleanTitle) return null;
+      const data = await fetchJson(
+        `https://fr.wikipedia.org/w/api.php?action=query&prop=extracts|pageimages|info&inprop=url&exintro=1&explaintext=1&pithumbsize=960&titles=${encodeURIComponent(cleanTitle)}&format=json&origin=*`,
+        signal
+      );
+      return extractWikiSummaryPage(data);
+    }
+
+    async function fetchWikiSummaryByPageId(pageId, signal) {
+      if (!pageId) return null;
+      const data = await fetchJson(
+        `https://fr.wikipedia.org/w/api.php?action=query&prop=extracts|pageimages|info&inprop=url&exintro=1&explaintext=1&pithumbsize=960&pageids=${pageId}&format=json&origin=*`,
+        signal
+      );
+      return extractWikiSummaryPage(data);
+    }
+
+    async function fetchNearbyWikiSummary(lat, lon, poiName, signal) {
+      const nearby = await fetchJson(
+        `https://fr.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=${POI_WIKI_RADIUS_M}&gslimit=8&gsnamespace=0&format=json&origin=*`,
+        signal
+      );
+      const candidates = Array.isArray(nearby?.query?.geosearch) ? nearby.query.geosearch : [];
+      if (candidates.length === 0) return null;
+      const nameTokens = extractPlaceTokens(poiName || '');
+      const best = candidates
+        .map((candidate) => {
+          const title = candidate?.title || '';
+          const dist = Number(candidate?.dist ?? Infinity);
+          const titleMatch = hasPlaceTokenMatch(title, nameTokens);
+          const score = (titleMatch ? 35 : 0) - Math.min(25, Math.round(dist / 250));
+          return { candidate, score };
+        })
+        .sort((a, b) => (b.score - a.score) || ((a.candidate?.dist ?? Infinity) - (b.candidate?.dist ?? Infinity)))[0];
+      if (!best?.candidate?.pageid) return null;
+      return fetchWikiSummaryByPageId(best.candidate.pageid, signal);
+    }
+
+    async function fetchPoiPreviewDetails(poi, signal) {
+      const tags = poi?.tags || {};
+      let locality = '';
+      try {
+        const geoRes = await fetch(
+          `https://api-adresse.data.gouv.fr/reverse/?lon=${poi.lon}&lat=${poi.lat}&type=municipality&limit=1`,
+          { signal }
+        );
+        if (geoRes.ok) {
+          const geoData = await geoRes.json();
+          const props = geoData?.features?.[0]?.properties || {};
+          locality = compactPoiText(props.city || props.name || props.label || '', 80);
+        }
+      } catch (_) {}
+
+      let wiki = null;
+      const wikiTitle = parseWikiTitleFromTag(tags.wikipedia);
+      if (wikiTitle) {
+        try {
+          wiki = await fetchWikiSummaryByTitle(wikiTitle, signal);
+        } catch (_) {}
+      }
+      if (!wiki) {
+        try {
+          wiki = await fetchNearbyWikiSummary(poi.lat, poi.lon, poi.name, signal);
+        } catch (_) {}
+      }
+
+      const typeHints = [tags.tourism, tags.leisure, tags.historic, tags.natural]
+        .map((v) => String(v || '').trim())
+        .filter(Boolean)
+        .join(' • ');
+
+      return {
+        locality,
+        summary: wiki?.summary || compactPoiText(tags.description || '', 280),
+        imageUrl: wiki?.imageUrl || '',
+        wikiUrl: wiki?.wikiUrl || '',
+        wikiTitle: wiki?.title || '',
+        website: normalizeExternalUrl(tags.website),
+        openingHours: compactPoiText(tags.opening_hours || '', 120),
+        phone: compactPoiText(tags.phone || '', 60),
+        typeHint: compactPoiText(typeHints, 100),
+        osmUrl: getPoiOsmUrl(poi),
+      };
     }
 
     async function fetchZonePhotoSlides(lat, lon, placeName, signal) {
@@ -737,6 +903,10 @@ out tags center 120;`;
       const [poiRaw, setPoiRaw] = useState([]);
       const [poiLoading, setPoiLoading] = useState(false);
       const [shouldLoadPoi, setShouldLoadPoi] = useState(false);
+      const [previewPoi, setPreviewPoi] = useState(null);
+      const [previewData, setPreviewData] = useState(null);
+      const [previewLoading, setPreviewLoading] = useState(false);
+      const [previewError, setPreviewError] = useState('');
 
       useEffect(() => {
         if (shouldLoadPoi) return;
@@ -824,6 +994,58 @@ out tags center 120;`;
         };
       }, [shouldLoadPoi, city.lat, city.lon]);
 
+      useEffect(() => {
+        if (!previewPoi) return;
+        let cancelled = false;
+        const abortController = new AbortController();
+        const cacheKey = getPoiPreviewCacheKey(previewPoi);
+        const cached = CARD_POI_PREVIEW_CACHE.get(cacheKey);
+        if (cached) {
+          setPreviewData(cached);
+          setPreviewLoading(false);
+          setPreviewError('');
+          return () => {
+            cancelled = true;
+            abortController.abort();
+          };
+        }
+        setPreviewLoading(true);
+        setPreviewData(null);
+        setPreviewError('');
+        (async () => {
+          try {
+            const details = await fetchPoiPreviewDetails(previewPoi, abortController.signal);
+            if (cancelled) return;
+            CARD_POI_PREVIEW_CACHE.set(cacheKey, details);
+            setPreviewData(details);
+          } catch (err) {
+            if (cancelled || err?.name === 'AbortError') return;
+            setPreviewError('Aperçu indisponible pour ce lieu.');
+            setPreviewData({ osmUrl: getPoiOsmUrl(previewPoi) });
+          } finally {
+            if (!cancelled) setPreviewLoading(false);
+          }
+        })();
+        return () => {
+          cancelled = true;
+          abortController.abort();
+        };
+      }, [previewPoi]);
+
+      useEffect(() => {
+        if (!previewPoi) return;
+        const previousOverflow = document.body.style.overflow;
+        const onKeyDown = (event) => {
+          if (event.key === 'Escape') setPreviewPoi(null);
+        };
+        document.body.style.overflow = 'hidden';
+        window.addEventListener('keydown', onKeyDown);
+        return () => {
+          document.body.style.overflow = previousOverflow;
+          window.removeEventListener('keydown', onKeyDown);
+        };
+      }, [previewPoi]);
+
       const dist = haversine(userLat, userLon, city.lat, city.lon);
       const driveMin = Math.round((dist / AVG_DRIVE_SPEED_KMH) * 60);
       const driveLabel = driveMin >= 60 ? `${Math.floor(driveMin / 60)} h` + (driveMin % 60 ? ` ${driveMin % 60} min` : '') : `${driveMin} min`;
@@ -859,6 +1081,22 @@ out tags center 120;`;
       const jumpToPhoto = (e, idx) => {
         e.stopPropagation();
         setPhotoIndex(idx);
+      };
+
+      const openPoiPreview = (e, poi) => {
+        e.stopPropagation();
+        setPreviewData(null);
+        setPreviewLoading(true);
+        setPreviewError('');
+        setPreviewPoi(poi);
+      };
+
+      const closePoiPreview = (e) => {
+        if (e) e.stopPropagation();
+        setPreviewPoi(null);
+        setPreviewData(null);
+        setPreviewLoading(false);
+        setPreviewError('');
       };
 
       return (
@@ -1027,15 +1265,24 @@ out tags center 120;`;
                           {poi.categoryLabel} • {(poi.distanceM / 1000).toFixed(1)} km
                         </p>
                       </div>
-                      <a
-                        href={`https://www.waze.com/ul?ll=${poi.lat},${poi.lon}&navigate=yes`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[11px] px-2 py-1 rounded-md bg-sky-50 text-sky-700 font-medium hover:bg-sky-100 shrink-0"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        Y aller
-                      </a>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          className="text-[11px] px-2 py-1 rounded-md bg-slate-100 text-slate-700 font-medium hover:bg-slate-200"
+                          onClick={(e) => openPoiPreview(e, poi)}
+                        >
+                          Voir
+                        </button>
+                        <a
+                          href={`https://www.waze.com/ul?ll=${poi.lat},${poi.lon}&navigate=yes`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[11px] px-2 py-1 rounded-md bg-sky-50 text-sky-700 font-medium hover:bg-sky-100"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          Y aller
+                        </a>
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -1054,6 +1301,114 @@ out tags center 120;`;
               </div>
             )}
           </div>
+
+          {previewPoi && (
+            <div
+              className="fixed inset-0 z-[1200] bg-slate-900/45 backdrop-blur-[1px] flex items-end sm:items-center justify-center p-3"
+              onClick={closePoiPreview}
+            >
+              <div
+                className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-slate-100">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-slate-800 truncate">
+                      {previewPoi.emoji} {previewPoi.name}
+                    </p>
+                    <p className="text-xs text-slate-500 truncate">
+                      {previewPoi.categoryLabel} • {(previewPoi.distanceM / 1000).toFixed(1)} km
+                      {previewData?.locality ? ` • ${previewData.locality}` : ''}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-xs px-2 py-1 rounded-md bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    onClick={closePoiPreview}
+                  >
+                    Fermer
+                  </button>
+                </div>
+
+                <div className="p-4 space-y-3 max-h-[68vh] overflow-y-auto">
+                  {previewLoading ? (
+                    <p className="text-sm text-slate-500">Chargement de l'aperçu...</p>
+                  ) : (
+                    <>
+                      {previewData?.imageUrl && (
+                        <img
+                          src={previewData.imageUrl}
+                          alt={previewData?.wikiTitle ? `Aperçu ${previewData.wikiTitle}` : `Aperçu ${previewPoi.name}`}
+                          className="w-full h-48 sm:h-56 object-cover rounded-xl border border-slate-100"
+                          onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                        />
+                      )}
+                      {previewData?.summary ? (
+                        <p className="text-sm text-slate-700 leading-relaxed">{previewData.summary}</p>
+                      ) : (
+                        <p className="text-sm text-slate-500">Aucun descriptif auto disponible pour ce lieu.</p>
+                      )}
+                      {(previewData?.typeHint || previewData?.openingHours || previewData?.phone) && (
+                        <div className="rounded-xl bg-slate-50 border border-slate-100 p-3 space-y-1 text-xs text-slate-600">
+                          {previewData?.typeHint && <p><span className="font-semibold text-slate-700">Type:</span> {previewData.typeHint}</p>}
+                          {previewData?.openingHours && <p><span className="font-semibold text-slate-700">Horaires:</span> {previewData.openingHours}</p>}
+                          {previewData?.phone && <p><span className="font-semibold text-slate-700">Contact:</span> {previewData.phone}</p>}
+                        </div>
+                      )}
+                      {previewError && (
+                        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                          {previewError}
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                <div className="px-4 pb-4 pt-1 border-t border-slate-100 flex flex-wrap justify-end gap-2">
+                  {previewData?.wikiUrl && (
+                    <a
+                      href={previewData.wikiUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] px-2.5 py-1.5 rounded-md bg-slate-100 text-slate-700 font-medium hover:bg-slate-200"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      Article
+                    </a>
+                  )}
+                  {previewData?.website && (
+                    <a
+                      href={previewData.website}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] px-2.5 py-1.5 rounded-md bg-slate-100 text-slate-700 font-medium hover:bg-slate-200"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      Site
+                    </a>
+                  )}
+                  <a
+                    href={previewData?.osmUrl || getPoiOsmUrl(previewPoi)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[11px] px-2.5 py-1.5 rounded-md bg-slate-100 text-slate-700 font-medium hover:bg-slate-200"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    Carte
+                  </a>
+                  <a
+                    href={`https://www.waze.com/ul?ll=${previewPoi.lat},${previewPoi.lon}&navigate=yes`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[11px] px-2.5 py-1.5 rounded-md bg-sky-500 text-white font-medium hover:bg-sky-600"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    Y aller
+                  </a>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       );
     }
