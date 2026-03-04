@@ -175,7 +175,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 19h00';
+    const APP_BUILD = '04/03/2026 - 19h03';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -402,7 +402,7 @@
     const MAX_GEO_IMAGE_DISTANCE_M = 10000;
     const MAX_CARD_PHOTOS = 3;
     const MAX_CARD_POIS = 3;
-    const POI_SEARCH_RADIUS_M = 5000;
+    const POI_SEARCH_RADIUS_M = 15000;
     const CARD_PHOTO_CACHE = new Map();
     const CARD_POI_CACHE = new Map();
     const NON_SCENIC_TITLE_HINTS = /\b(map|carte|plan|logo|flag|drapeau|blason|coat[_ -]?of[_ -]?arms|symbol|diagram|locator|location map|svg|liste de|chronologie|histoire de)\b/i;
@@ -1041,7 +1041,7 @@ out tags center 120;`;
                 </ul>
               ) : (
                 <p className="text-xs text-slate-500">
-                  Aucun lieu notable trouvé dans un rayon de 5 km.
+                  Aucun lieu notable trouvé dans un rayon de 15 km.
                 </p>
               )}
             </div>
