@@ -175,7 +175,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 18h23';
+    const APP_BUILD = '04/03/2026 - 18h25';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -786,7 +786,6 @@
               )}
               <h3 className="text-xl font-bold text-slate-800">{cardTitle}</h3>
             </div>
-            {city.type && <p className="text-xs text-sky-600 font-medium mt-0.5">{getPlaceTypeLabel(city.type)}</p>}
 
             {/* Ligne : distance, temps voiture, lien itinéraire | météo */}
             <div className="flex flex-wrap items-center justify-between gap-2 mt-2">
