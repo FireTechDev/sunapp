@@ -127,7 +127,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 17h03';
+    const APP_BUILD = '04/03/2026 - 17h07';
 
     // ---------- Utilitaires ----------
     function haversine(lat1, lon1, lat2, lon2) {
@@ -240,6 +240,99 @@
       return PLACE_TYPE_LABELS[type] || type || 'Lieu';
     }
 
+    const MAX_GEO_IMAGE_DISTANCE_M = 10000;
+    const MAX_REGION_PHOTOS = 8;
+    const CARD_PHOTO_CACHE = new Map();
+    const NON_SCENIC_IMAGE_HINTS = /\b(map|carte|plan|logo|flag|drapeau|blason|coat[_ -]?of[_ -]?arms|symbol|diagram|locator|location map|svg)\b/i;
+
+    function getCardPhotoCacheKey(lat, lon) {
+      return `${Number(lat).toFixed(4)},${Number(lon).toFixed(4)}`;
+    }
+
+    function sanitizeCommonsTitle(title) {
+      return (title || '').replace(/^File:/i, '').replace(/_/g, ' ');
+    }
+
+    async function fetchJson(url, signal) {
+      const res = await fetch(url, { signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    }
+
+    async function fetchZonePhotoSlides(lat, lon, signal) {
+      let primarySlide = null;
+      try {
+        const nearbyWiki = await fetchJson(
+          `https://fr.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=${MAX_GEO_IMAGE_DISTANCE_M}&gslimit=8&format=json&origin=*`,
+          signal
+        );
+        const nearestWiki = (nearbyWiki?.query?.geosearch || []).find((item) => item?.pageid && (item?.dist ?? Infinity) <= MAX_GEO_IMAGE_DISTANCE_M);
+        if (nearestWiki?.pageid) {
+          const wikiImageData = await fetchJson(
+            `https://fr.wikipedia.org/w/api.php?action=query&prop=pageimages&pithumbsize=900&pageids=${nearestWiki.pageid}&format=json&origin=*`,
+            signal
+          );
+          const wikiPage = wikiImageData?.query?.pages && Object.values(wikiImageData.query.pages)[0];
+          const wikiThumb = wikiPage?.thumbnail?.source;
+          if (wikiThumb) {
+            primarySlide = {
+              url: wikiThumb,
+              label: wikiPage?.title || 'Lieu proche',
+              distanceM: Math.round(nearestWiki.dist || 0),
+              source: 'wikipedia',
+            };
+          }
+        }
+      } catch (_) {}
+
+      let regionSlides = [];
+      try {
+        const commonsGeo = await fetchJson(
+          `https://commons.wikimedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=${MAX_GEO_IMAGE_DISTANCE_M}&gslimit=30&gsnamespace=6&format=json&origin=*`,
+          signal
+        );
+        const commonsCandidates = (commonsGeo?.query?.geosearch || [])
+          .filter((item) => item?.pageid && (item?.dist ?? Infinity) <= MAX_GEO_IMAGE_DISTANCE_M)
+          .sort((a, b) => (a.dist ?? 0) - (b.dist ?? 0));
+        if (commonsCandidates.length > 0) {
+          const pageIds = commonsCandidates.map((item) => item.pageid).join('|');
+          const commonsInfo = await fetchJson(
+            `https://commons.wikimedia.org/w/api.php?action=query&prop=imageinfo&pageids=${pageIds}&iiprop=url|mime&iiurlwidth=1200&format=json&origin=*`,
+            signal
+          );
+          const byPageId = new Map(commonsCandidates.map((item) => [String(item.pageid), item]));
+          const seenUrls = new Set(primarySlide ? [primarySlide.url] : []);
+          regionSlides = Object.values(commonsInfo?.query?.pages || {})
+            .map((page) => {
+              const candidate = byPageId.get(String(page?.pageid));
+              const info = page?.imageinfo?.[0];
+              const imgUrl = info?.thumburl || info?.url || null;
+              const mime = info?.mime || '';
+              const title = sanitizeCommonsTitle(page?.title || candidate?.title || '');
+              if (!candidate || !imgUrl || !mime.startsWith('image/')) return null;
+              if (/svg|gif/i.test(mime)) return null;
+              if (NON_SCENIC_IMAGE_HINTS.test(title)) return null;
+              if (seenUrls.has(imgUrl)) return null;
+              seenUrls.add(imgUrl);
+              return {
+                url: imgUrl,
+                label: title,
+                distanceM: Math.round(candidate.dist || 0),
+                source: 'commons',
+              };
+            })
+            .filter(Boolean)
+            .sort((a, b) => (a.distanceM ?? 0) - (b.distanceM ?? 0))
+            .slice(0, MAX_REGION_PHOTOS);
+        }
+      } catch (_) {}
+
+      const slides = [];
+      if (primarySlide && (primarySlide.distanceM ?? Infinity) <= MAX_GEO_IMAGE_DISTANCE_M) slides.push(primarySlide);
+      slides.push(...regionSlides.filter((slide) => (slide.distanceM ?? Infinity) <= MAX_GEO_IMAGE_DISTANCE_M));
+      return slides.slice(0, MAX_REGION_PHOTOS + 1);
+    }
+
     // ---------- Icônes (Lucide-style inline SVGs) ----------
     const IconSun = (props) => (
       <svg {...props} xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
@@ -348,31 +441,39 @@
     }
 
     function CityCard({ city, userLat, userLon, onShowOnMap, isRecommended }) {
-      const [placeImageUrl, setPlaceImageUrl] = useState(null);
+      const [photoSlides, setPhotoSlides] = useState([]);
+      const [photoIndex, setPhotoIndex] = useState(0);
 
       useEffect(() => {
         let cancelled = false;
-        const lat = city.lat;
-        const lon = city.lon;
-        const url = `https://fr.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=500&format=json&origin=*`;
-        fetch(url)
-          .then((r) => r.json())
-          .then((data) => {
+        const abortController = new AbortController();
+        const cacheKey = getCardPhotoCacheKey(city.lat, city.lon);
+        const cachedSlides = CARD_PHOTO_CACHE.get(cacheKey);
+        if (cachedSlides) {
+          setPhotoSlides(cachedSlides);
+          setPhotoIndex(0);
+          return () => {
+            cancelled = true;
+            abortController.abort();
+          };
+        }
+        (async () => {
+          try {
+            const slides = await fetchZonePhotoSlides(city.lat, city.lon, abortController.signal);
             if (cancelled) return;
-            const pageId = data?.query?.geosearch?.[0]?.pageid;
-            if (!pageId) return;
-            return fetch(`https://fr.wikipedia.org/w/api.php?action=query&prop=pageimages&pithumbsize=500&pageids=${pageId}&format=json&origin=*`);
-          })
-          .then((r) => r && r.json())
-          .then((data) => {
-            if (cancelled || !data) return;
-            const pages = data?.query?.pages;
-            const page = pages && Object.values(pages)[0];
-            const thumb = page?.thumbnail?.source;
-            if (thumb) setPlaceImageUrl(thumb);
-          })
-          .catch(() => {});
-        return () => { cancelled = true; };
+            CARD_PHOTO_CACHE.set(cacheKey, slides);
+            setPhotoSlides(slides);
+            setPhotoIndex(0);
+          } catch (err) {
+            if (cancelled || err?.name === 'AbortError') return;
+            setPhotoSlides([]);
+            setPhotoIndex(0);
+          }
+        })();
+        return () => {
+          cancelled = true;
+          abortController.abort();
+        };
       }, [city.lat, city.lon]);
 
       const dist = haversine(userLat, userLon, city.lat, city.lon);
@@ -391,6 +492,26 @@
       const showWindExplanation = windScoreValue < 40;
       const hasGenericName = /^Zone\s+\d+$/i.test(city.name || '');
       const cardTitle = hasGenericName ? 'Spot ensoleille' : city.name;
+      const activeSlide = photoSlides[photoIndex] || null;
+      const hasNearbyRegionPhotos = photoSlides.some((slide) => slide.source === 'commons');
+      const showCarouselControls = photoSlides.length > 1;
+
+      const previousPhoto = (e) => {
+        e.stopPropagation();
+        if (photoSlides.length <= 1) return;
+        setPhotoIndex((prev) => (prev - 1 + photoSlides.length) % photoSlides.length);
+      };
+
+      const nextPhoto = (e) => {
+        e.stopPropagation();
+        if (photoSlides.length <= 1) return;
+        setPhotoIndex((prev) => (prev + 1) % photoSlides.length);
+      };
+
+      const jumpToPhoto = (e, idx) => {
+        e.stopPropagation();
+        setPhotoIndex(idx);
+      };
 
       return (
         <div
@@ -407,7 +528,7 @@
               ✨ S'améliore bientôt
             </div>
           )}
-          {/* Photo du lieu (Wikipedia) ou placeholder */}
+          {/* Photo principale + carrousel de la zone (strictement <= 10 km) */}
           <div className="p-3 pb-0">
             <div className="card-visual rounded-xl aspect-[4/3] flex items-center justify-center overflow-hidden bg-slate-100 relative">
               <div
@@ -416,15 +537,70 @@
               >
                 {weatherScore.score}/5 {weatherScore.label} {weatherScore.emoji}
               </div>
-              {placeImageUrl ? (
-                <img
-                  src={placeImageUrl}
-                  alt={city.name}
-                  className="w-full h-full object-cover"
-                  onError={() => setPlaceImageUrl(null)}
-                />
+              {activeSlide ? (
+                <>
+                  <img
+                    src={activeSlide.url}
+                    alt={activeSlide.label ? `${cardTitle} — ${activeSlide.label}` : cardTitle}
+                    className="w-full h-full object-cover"
+                    onError={() => {
+                      const badUrl = activeSlide.url;
+                      setPhotoSlides((prev) => prev.filter((slide) => slide.url !== badUrl));
+                      setPhotoIndex(0);
+                    }}
+                  />
+                  {showCarouselControls && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={previousPhoto}
+                        className="absolute left-2 top-1/2 -translate-y-1/2 z-20 w-7 h-7 rounded-full bg-black/45 text-white text-lg leading-none hover:bg-black/60"
+                        aria-label="Photo précédente"
+                        title="Photo précédente"
+                      >
+                        ‹
+                      </button>
+                      <button
+                        type="button"
+                        onClick={nextPhoto}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 z-20 w-7 h-7 rounded-full bg-black/45 text-white text-lg leading-none hover:bg-black/60"
+                        aria-label="Photo suivante"
+                        title="Photo suivante"
+                      >
+                        ›
+                      </button>
+                      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 bg-black/35 px-2 py-1 rounded-full">
+                        {photoSlides.map((_, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={(e) => jumpToPhoto(e, idx)}
+                            className={`w-1.5 h-1.5 rounded-full ${idx === photoIndex ? 'bg-white' : 'bg-white/50'}`}
+                            aria-label={`Voir photo ${idx + 1}`}
+                            title={`Voir photo ${idx + 1}`}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  <div className="absolute top-2 left-2 z-20 px-2 py-1 rounded-md bg-black/45 text-white text-[11px]">
+                    Photos <= 10 km
+                  </div>
+                  <div
+                    className="absolute bottom-2 right-2 z-10 px-2 py-1 rounded-md bg-black/45 text-white text-[11px] max-w-[70%] truncate"
+                    title={activeSlide.label || ''}
+                  >
+                    {(activeSlide.distanceM != null ? `${(activeSlide.distanceM / 1000).toFixed(1)} km` : 'Zone locale')}
+                    {activeSlide.source === 'commons' ? ' • Environnement' : ' • Spot'}
+                  </div>
+                  {hasNearbyRegionPhotos && (
+                    <div className="absolute top-2 right-2 z-10 px-2 py-1 rounded-md bg-emerald-500/90 text-white text-[11px]">
+                      Paysages proches
+                    </div>
+                  )}
+                </>
               ) : null}
-              {!placeImageUrl && (
+              {!activeSlide && (
                 <div className={`absolute inset-0 flex flex-col items-center justify-center text-center px-4 ${hasSun ? 'bg-gradient-to-br from-amber-100 via-orange-100 to-sky-100 text-orange-800' : 'bg-gradient-to-br from-slate-100 via-slate-200 to-sky-100 text-slate-700'}`}>
                   <div className="text-3xl mb-2">{hasSun ? '🌤️' : '⛅'}</div>
                   <span className="text-sm font-semibold">{cardTitle}</span>
