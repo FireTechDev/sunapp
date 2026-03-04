@@ -175,7 +175,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 19h31';
+    const APP_BUILD = '04/03/2026 - 19h45';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -1717,7 +1717,8 @@ out tags center 120;`;
                 nearest = candidate;
               }
             }
-            if (nearest && nearestDist <= 30) {
+            const replacementRadiusKm = Math.max(30, Math.min(120, radiusKm * 0.8));
+            if (nearest && nearestDist <= replacementRadiusKm) {
               item.name = nearest.name;
             }
           }
@@ -1864,7 +1865,7 @@ out tags center 120;`;
         setCities([]);
         setIsFallbackMode(false);
 
-        const grid = generateSearchGrid(position.lat, position.lon, radiusKm, 15, 320);
+        const grid = generateSearchGrid(position.lat, position.lon, radiusKm, 15, 220);
         if (grid.length === 0) {
           setError('Aucun point de recherche disponible. Élargissez le rayon.');
           finishIfCurrent();
@@ -1953,38 +1954,69 @@ out tags center 120;`;
           const params = 'current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,cloud_cover&hourly=temperature_2m,weather_code,wind_speed_10m&forecast_days=1&timezone=auto';
           const METEO_BATCH_SIZE = 48;
           const METEO_MIN_BATCH_SIZE = 12;
+          const METEO_CHUNK_DELAY_MS = 280;
+          const waitWithSignal = (ms) => new Promise((resolve, reject) => {
+            const timer = window.setTimeout(resolve, ms);
+            const onAbort = () => {
+              window.clearTimeout(timer);
+              reject(new DOMException('Aborted', 'AbortError'));
+            };
+            signal.addEventListener('abort', onAbort, { once: true });
+          });
           const fetchMeteoBatch = async (pts) => {
             const latStr = pts.map((p) => p.lat).join(',');
             const lonStr = pts.map((p) => p.lon).join(',');
             const url = `${baseUrl}?latitude=${latStr}&longitude=${lonStr}&${params}`;
             const meteoRes = await fetch(url, { signal });
-            if (!meteoRes.ok) throw new Error('Service météo indisponible. Réessayez.');
+            if (!meteoRes.ok) {
+              const err = new Error(meteoRes.status === 429
+                ? 'Limite API météo atteinte (429). Réessayez dans 1 minute.'
+                : 'Service météo indisponible. Réessayez.'
+              );
+              err.status = meteoRes.status;
+              throw err;
+            }
             return meteoRes.json();
           };
-          const fetchAndScoreChunk = async (pts) => {
+          const fetchAndScoreChunk = async (pts, depth = 0) => {
             if (!pts || pts.length === 0) return [];
             try {
               const data = await fetchMeteoBatch(pts);
               return mergeMeteo(pts, data);
             } catch (err) {
               if (err?.name === 'AbortError') throw err;
+              if (Number(err?.status) === 429) throw err;
               if (pts.length <= METEO_MIN_BATCH_SIZE) return [];
+              if (depth >= 2) return [];
               const mid = Math.ceil(pts.length / 2);
-              const left = await fetchAndScoreChunk(pts.slice(0, mid));
-              const right = await fetchAndScoreChunk(pts.slice(mid));
+              const left = await fetchAndScoreChunk(pts.slice(0, mid), depth + 1);
+              const right = await fetchAndScoreChunk(pts.slice(mid), depth + 1);
               return [...left, ...right];
             }
           };
 
           let scored = [];
           let meteoRowId = 0;
+          let rateLimited = false;
           for (let i = 0; i < grid.length; i += METEO_BATCH_SIZE) {
             if (!isCurrentSearch()) return;
+            if (i > 0) await waitWithSignal(METEO_CHUNK_DELAY_MS);
             const chunk = grid.slice(i, i + METEO_BATCH_SIZE);
-            const partialScored = await fetchAndScoreChunk(chunk);
-            for (const row of partialScored) {
-              scored.push({ ...row, id: `grid-${meteoRowId++}` });
+            try {
+              const partialScored = await fetchAndScoreChunk(chunk);
+              for (const row of partialScored) {
+                scored.push({ ...row, id: `grid-${meteoRowId++}` });
+              }
+            } catch (err) {
+              if (err?.name === 'AbortError') throw err;
+              if (Number(err?.status) === 429) {
+                rateLimited = true;
+                break;
+              }
             }
+          }
+          if (rateLimited && scored.length < 10) {
+            throw new Error('Limite API météo atteinte (429). Réessayez dans 1 minute.');
           }
           if (scored.length === 0) throw new Error('Aucune donnée météo exploitable dans le rayon.');
           const byScoreThenDist = (a, b) => {
