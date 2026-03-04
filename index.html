@@ -127,7 +127,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 17h00';
+    const APP_BUILD = '04/03/2026 - 17h03';
 
     // ---------- Utilitaires ----------
     function haversine(lat1, lon1, lat2, lon2) {
@@ -287,32 +287,66 @@
       );
     }
 
-    // ---------- TrendBar : tendance météo sur 5 tranches (statique, mobile-first) ----------
-    function TrendBar({ scores, labels, peakIndex }) {
-      if (!scores || scores.length === 0) return null;
-      const segClass = (score) => {
-        if (score < 30) return 'bg-slate-300';
-        if (score <= 60) return 'bg-yellow-300';
-        return 'bg-orange-500';
-      };
+    function getWeatherIcon(code) {
+      if (code === 0) return '☀️';
+      if ([1, 2].includes(code)) return '🌤️';
+      if (code === 3) return '☁️';
+      if ([45, 48].includes(code)) return '🌫️';
+      if ([71, 73, 75, 77, 85, 86].includes(code)) return '❄️';
+      if ([95, 96, 99].includes(code)) return '⛈️';
+      if ([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return '🌧️';
+      return '⛅';
+    }
+
+    // ---------- TrendTimeline : aperçu horaire lisible sur 5 créneaux ----------
+    function TrendTimeline({ slots, peakIndex }) {
+      if (!slots || slots.length === 0) return null;
+      const bestIndex = peakIndex >= 0
+        ? peakIndex
+        : slots.reduce((best, s, i) => (s.score > slots[best].score ? i : best), 0);
+      const bestSlot = slots[bestIndex] || slots[0];
       return (
         <div className="w-full">
-          <div className="flex gap-0.5 rounded-lg overflow-hidden h-2" style={{ minHeight: 8 }}>
-            {scores.slice(0, 5).map((s, i) => (
-              <div key={i} className={`flex-1 min-w-0 relative rounded-sm ${segClass(s)}`}>
-                {peakIndex >= 0 && peakIndex === i && <span className="absolute -top-1 left-1/2 -translate-x-1/2 text-xs text-slate-700" title="Moment optimal">●</span>}
-              </div>
-            ))}
-          </div>
-          <div className="flex justify-between mt-1 px-0.5">
-            <span className="text-[10px] text-slate-400">{labels[0] || 'Maintenant'}</span>
-            <span className="text-[10px] text-slate-400">{labels[labels.length - 1] || ''}</span>
+          {bestSlot && (
+            <p className="text-xs text-slate-600 mb-2">
+              Meilleur créneau: <span className="font-semibold text-slate-800">{bestSlot.label || '—'}</span>
+              {bestSlot.feelsLike != null ? ` • ressenti ${Math.round(bestSlot.feelsLike)}°C` : ''}
+              {bestSlot.windKmh != null ? ` • vent ${Math.round(bestSlot.windKmh)} km/h` : ''}
+            </p>
+          )}
+          <div className="flex gap-2 overflow-x-auto pb-1 snap-x snap-mandatory">
+            {slots.slice(0, 5).map((slot, i) => {
+              const isBest = i === bestIndex;
+              return (
+                <div
+                  key={i}
+                  className={`min-w-[118px] rounded-xl border p-2.5 snap-start ${isBest ? 'bg-emerald-50 border-emerald-300' : 'bg-slate-50 border-slate-200'}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold text-slate-700">{slot.label || '—'}</span>
+                    {isBest && <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500 text-white">Top</span>}
+                  </div>
+                  <div className="mt-1.5 text-xl leading-none">{getWeatherIcon(slot.weatherCode)}</div>
+                  <p className="mt-1 text-[10px] text-slate-500 truncate" title={getWeatherLabel(slot.weatherCode)}>
+                    {getWeatherLabel(slot.weatherCode)}
+                  </p>
+                  <p className="mt-1.5 text-sm font-semibold text-slate-800">
+                    {slot.feelsLike != null ? `${Math.round(slot.feelsLike)}°C` : '—'}
+                  </p>
+                  <p className="text-[10px] text-slate-500">
+                    {slot.windKmh != null ? `Vent ${Math.round(slot.windKmh)} km/h` : 'Vent —'}
+                  </p>
+                  <p className="text-[10px] text-slate-500">
+                    Score {slot.score != null ? Math.round(slot.score) : '—'}/100
+                  </p>
+                </div>
+              );
+            })}
           </div>
         </div>
       );
     }
 
-    // ---------- Carte ville (style maquette : blanc, bannière bleue, visuels, météo, À voir) ----------
     function CityCard({ city, userLat, userLon, onShowOnMap, isRecommended }) {
       const [placeImageUrl, setPlaceImageUrl] = useState(null);
 
@@ -463,9 +497,9 @@
             </div>
 
             {/* Tendance sur 5 h */}
-            {city.hourlyTrend && city.hourlyTrend.length >= 2 && (
+            {city.trendSlots && city.trendSlots.length >= 2 && (
               <div className="mt-4 pt-3 border-t border-slate-100">
-                <TrendBar scores={city.hourlyTrend} labels={city.trendTimes || []} peakIndex={city.peakIndex ?? -1} />
+                <TrendTimeline slots={city.trendSlots} peakIndex={city.peakIndex ?? -1} />
               </div>
             )}
 
@@ -697,36 +731,44 @@
             const temps = hourly.temperature_2m || [];
             const winds = hourly.wind_speed_10m || [];
             const codes = hourly.weather_code || [];
-            let hourlyTrend = [];
-            let trendTimes = [];
-            const currentScore = weatherScoreFromSlot(feelsLike ?? temp, wind, cur.weather_code);
-            hourlyTrend.push(currentScore);
-            trendTimes.push('Maintenant');
-            let idx = 0;
-            for (let j = 0; j < times.length; j++) {
-              const slotTime = new Date(times[j]);
-              if (slotTime > now) { idx = j; break; }
-            }
+            let trendSlots = [];
+            const pushTrendSlot = (label, t, w, code) => {
+              const felt = windChill(t, w);
+              const score = weatherScoreFromSlot(felt ?? t, w, code);
+              trendSlots.push({
+                label,
+                temp: t != null ? Number(t) : null,
+                feelsLike: felt != null ? felt : (t != null ? Number(t) : null),
+                windKmh: w != null ? Number(w) : null,
+                weatherCode: code ?? null,
+                score,
+              });
+              return score;
+            };
+
+            const currentScore = pushTrendSlot('Maintenant', temp, wind, cur.weather_code);
+            let idx = times.findIndex((timeStr) => new Date(timeStr) > now);
+            if (idx === -1) idx = 0;
             for (let k = 0; k < 4 && idx + k < times.length; k++) {
               const j = idx + k;
               const t = temps[j];
               const w = winds[j];
               const code = codes[j];
-              const felt = windChill(t, w) ?? t;
-              hourlyTrend.push(weatherScoreFromSlot(felt, w, code));
               const d = new Date(times[j]);
-              trendTimes.push(d.getHours() + 'h');
+              const label = Number.isNaN(d.getTime()) ? '—' : d.getHours() + 'h';
+              pushTrendSlot(label, t, w, code);
             }
-            while (hourlyTrend.length < 5) {
-              hourlyTrend.push(currentScore);
-              trendTimes.push(trendTimes[trendTimes.length - 1] || '—');
+            while (trendSlots.length < 5) {
+              pushTrendSlot(trendSlots[trendSlots.length - 1]?.label || '—', temp, wind, cur.weather_code);
             }
-            const avgFuture = hourlyTrend.length > 1
-              ? hourlyTrend.slice(1).reduce((a, b) => a + b, 0) / (hourlyTrend.length - 1)
+            const avgFuture = trendSlots.length > 1
+              ? trendSlots.slice(1).reduce((a, b) => a + (b.score ?? 0), 0) / (trendSlots.length - 1)
               : currentScore;
-            const improvesSoon = hourlyTrend.length > 1 && (avgFuture >= currentScore * 1.2);
-            const peakIndex = hourlyTrend.length > 1 ? hourlyTrend.indexOf(Math.max(...hourlyTrend)) : 0;
-            const showPeak = peakIndex > 0 && hourlyTrend[peakIndex] > currentScore + 10;
+            const improvesSoon = trendSlots.length > 1 && (avgFuture >= currentScore * 1.2);
+            const peakIndex = trendSlots.length > 0
+              ? trendSlots.reduce((best, slot, idx) => (slot.score > trendSlots[best].score ? idx : best), 0)
+              : 0;
+            const showPeak = peakIndex > 0 && trendSlots[peakIndex].score > currentScore + 10;
 
             return {
               id: `grid-${i}`,
@@ -741,8 +783,9 @@
               cloud_cover: cur.cloud_cover,
               _dist: haversine(position.lat, position.lon, p.lat, p.lon),
               weatherScore100: currentScore,
-              hourlyTrend: hourlyTrend.slice(0, 5),
-              trendTimes: trendTimes.slice(0, 5),
+              trendSlots: trendSlots.slice(0, 5),
+              hourlyTrend: trendSlots.slice(0, 5).map((s) => s.score),
+              trendTimes: trendSlots.slice(0, 5).map((s) => s.label),
               improvesSoon: !!improvesSoon,
               peakIndex: showPeak ? peakIndex : -1,
             };
