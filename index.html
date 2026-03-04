@@ -127,6 +127,8 @@
 
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo } = React;
+    const APP_VERSION = '0.03';
+    const APP_BUILD = '2026-03-04-01';
 
     // ---------- Utilitaires ----------
     function haversine(lat1, lon1, lat2, lon2) {
@@ -152,14 +154,21 @@
     };
     const WEATHER_LEVEL_LABELS = ['Tout temps', 'Pas de neige ni orage', 'Pas de pluie', 'Nuages OK', 'Soleil uniquement'];
 
+    // Vent : score 0–100 (même formule que WeatherScore) pour affichage des alertes dans les cartes
+    function getWindScoreValue(windKmh) {
+      if (windKmh == null) return 100;
+      const w = Number(windKmh);
+      return w <= 20 ? Math.max(0, 100 - 2 * w) : Math.max(0, 60 - 4 * (w - 20));
+    }
+
     // Score météo 0-5 pour affichage sur les cartes (tag sur l'image)
     const WEATHER_SCORE_CONFIG = [
-      { score: 0, emoji: '💩', label: 'Nul', desc: 'Pluie battante, vent violent ou froid polaire. On reste à l\'abri !' },
-      { score: 1, emoji: '⛈️', label: 'Médiocre', desc: 'Grisaille dominante, petit vent frais. Pas l\'idéal pour une sortie.' },
-      { score: 2, emoji: '⛅', label: 'Passable', desc: 'Quelques éclaircies mais le fond de l\'air reste frais ou instable.' },
-      { score: 3, emoji: '🌤️', label: 'Agréable', desc: 'Le soleil est là, le vent est calme. Une bonne journée pour s\'aérer !' },
-      { score: 4, emoji: '☀️', label: 'Radieux', desc: 'Grand ciel bleu, température idéale. On sort les lunettes de soleil !' },
-      { score: 5, emoji: '😎', label: 'Parfait', desc: 'Conditions de carte postale : chaud, sans vent et 100% ensoleillé !' },
+      { score: 0, emoji: '💩', label: 'Nul', desc: 'Pluie battante, vent violent ou froid polaire. On reste à l\'abri !', badgeClass: 'bg-red-600 text-white' },
+      { score: 1, emoji: '⛈️', label: 'Médiocre', desc: 'Grisaille dominante, petit vent frais. Pas l\'idéal pour une sortie.', badgeClass: 'bg-orange-600 text-white' },
+      { score: 2, emoji: '⛅', label: 'Passable', desc: 'Quelques éclaircies mais le fond de l\'air reste frais ou instable.', badgeClass: 'bg-amber-600 text-white' },
+      { score: 3, emoji: '🌤️', label: 'Agréable', desc: 'Le soleil est là, le vent est calme. Une bonne journée pour s\'aérer !', badgeClass: 'bg-yellow-500 text-slate-900' },
+      { score: 4, emoji: '☀️', label: 'Radieux', desc: 'Grand ciel bleu, température idéale. On sort les lunettes de soleil !', badgeClass: 'bg-emerald-500 text-white' },
+      { score: 5, emoji: '😎', label: 'Parfait', desc: 'Conditions de carte postale : chaud, sans vent et 100% ensoleillé !', badgeClass: 'bg-green-500 text-white' },
     ];
     function getWeatherScore(city) {
       const code = city.weather_code ?? 99;
@@ -202,6 +211,18 @@
       return Math.round(Rc * 10) / 10;
     }
 
+    // Score 0–100 pour une tranche horaire (temp, vent km/h, code météo) — même logique que WeatherScore
+    function weatherScoreFromSlot(temp, windKmh, weatherCode) {
+      const t = temp ?? 20;
+      const w = windKmh ?? 10;
+      const tempScore = Math.max(0, 100 - 4 * Math.abs(t - 25));
+      const windScore = w <= 20 ? Math.max(0, 100 - 2 * w) : Math.max(0, 60 - 4 * (w - 20));
+      let score = (tempScore * 0.5) + (windScore * 0.5);
+      if (t < 15 && w > 25) score -= 20;
+      const isSunny = SUN_CODES.includes(weatherCode ?? -1);
+      if (!isSunny) score *= 0.5;
+      return Math.max(0, Math.min(100, score));
+    }
     // Météo : appel direct (Open-Meteo autorise CORS). Pas de proxy.
     async function fetchNoCors(url) {
       return fetch(url);
@@ -273,6 +294,31 @@
       );
     }
 
+    // ---------- TrendBar : tendance météo sur 5 tranches (statique, mobile-first) ----------
+    function TrendBar({ scores, labels, peakIndex }) {
+      if (!scores || scores.length === 0) return null;
+      const segClass = (score) => {
+        if (score < 30) return 'bg-slate-300';
+        if (score <= 60) return 'bg-yellow-300';
+        return 'bg-orange-500';
+      };
+      return (
+        <div className="w-full">
+          <div className="flex gap-0.5 rounded-lg overflow-hidden h-2" style={{ minHeight: 8 }}>
+            {scores.slice(0, 5).map((s, i) => (
+              <div key={i} className={`flex-1 min-w-0 relative rounded-sm ${segClass(s)}`}>
+                {peakIndex >= 0 && peakIndex === i && <span className="absolute -top-1 left-1/2 -translate-x-1/2 text-xs text-slate-700" title="Moment optimal">●</span>}
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-between mt-1 px-0.5">
+            <span className="text-[10px] text-slate-400">{labels[0] || 'Maintenant'}</span>
+            <span className="text-[10px] text-slate-400">{labels[labels.length - 1] || ''}</span>
+          </div>
+        </div>
+      );
+    }
+
     // ---------- Carte ville (style maquette : blanc, bannière bleue, visuels, météo, À voir) ----------
     function CityCard({ city, userLat, userLon, onShowOnMap, isRecommended }) {
       const [placeImageUrl, setPlaceImageUrl] = useState(null);
@@ -308,6 +354,14 @@
       const hasSun = SUN_CODES.includes(city.weather_code);
       const weatherLabel = getWeatherLabel(city.weather_code);
       const weatherScore = getWeatherScore(city);
+      const windScoreValue = getWindScoreValue(city.wind_speed);
+      const windAlert = windScoreValue < 50;
+      const temp = city.temp;
+      const feelsLike = city.feelsLike ?? city.temp;
+      const feelsLikeGap = (temp != null && feelsLike != null) ? Math.abs(temp - feelsLike) : 0;
+      const showFeelsLikeAlert = feelsLikeGap > 3;
+      const malusSoleil = !hasSun;
+      const showWindExplanation = windScoreValue < 40;
 
       return (
         <div
@@ -319,11 +373,16 @@
               Recommandé 🌟
             </div>
           )}
+          {city.improvesSoon && (
+            <div className="absolute top-2 right-2 z-10 px-2 py-1 rounded-lg bg-emerald-500/95 text-white text-xs font-medium shadow" style={isRecommended ? { top: '2.5rem' } : {}}>
+              ✨ S'améliore bientôt
+            </div>
+          )}
           {/* Photo du lieu (Wikipedia) ou placeholder */}
           <div className="p-3 pb-0">
             <div className="card-visual rounded-xl aspect-[4/3] flex items-center justify-center overflow-hidden bg-slate-100 relative">
               <div
-                className="absolute bottom-2 left-2 z-10 px-2.5 py-1 rounded-lg bg-black/70 text-white text-sm font-medium shadow"
+                className={`absolute bottom-2 left-2 z-10 px-2.5 py-1 rounded-lg text-sm font-medium shadow ${weatherScore.badgeClass || 'bg-black/70 text-white'}`}
                 title={weatherScore.desc}
               >
                 {weatherScore.score}/5 {weatherScore.label} {weatherScore.emoji}
@@ -380,7 +439,15 @@
                 <IconThermometer className="w-5 h-5 text-orange-500 shrink-0" />
                 <span className="text-slate-700 font-medium">
                   {city.temp != null ? (
-                    city.feelsLike != null
+                    showFeelsLikeAlert ? (
+                      <>
+                        <span className="text-lg font-bold text-slate-800">{Number(feelsLike).toFixed(1)} °C</span>
+                        <span className="text-slate-500 text-sm ml-1">(réel {Number(city.temp).toFixed(1)} °C)</span>
+                        <span className="ml-1.5 text-xs font-medium text-sky-600 bg-sky-50 px-1.5 py-0.5 rounded">
+                          {feelsLike < (city.temp ?? 0) ? 'Effet de vent' : 'Frais'}
+                        </span>
+                      </>
+                    ) : city.feelsLike != null
                       ? `${Number(city.temp).toFixed(1)} °C (ressenti ${Number(city.feelsLike).toFixed(1)} °C)`
                       : `${Number(city.temp).toFixed(1)} °C`
                   ) : '—'}
@@ -391,10 +458,20 @@
                 <span className="text-slate-700">{city.humidity != null ? `${city.humidity} %` : '—'}</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <IconWind className="w-5 h-5 text-slate-400 shrink-0" />
-                <span className="text-slate-700">{city.wind_speed != null ? `${Number(city.wind_speed).toFixed(1)} km/h` : '—'}</span>
+                <IconWind className={`w-5 h-5 shrink-0 ${windAlert ? 'text-orange-500' : 'text-slate-400'}`} />
+                <span className={windAlert ? 'font-bold text-orange-600' : 'text-slate-700'}>
+                  {city.wind_speed != null ? `${Number(city.wind_speed).toFixed(1)} km/h` : '—'}
+                </span>
+                {windAlert && <span className="text-orange-600" title="Vent fort">🌬️</span>}
               </div>
             </div>
+
+            {/* Tendance sur 5 h */}
+            {city.hourlyTrend && city.hourlyTrend.length >= 2 && (
+              <div className="mt-4 pt-3 border-t border-slate-100">
+                <TrendBar scores={city.hourlyTrend} labels={city.trendTimes || []} peakIndex={city.peakIndex ?? -1} />
+              </div>
+            )}
 
             {/* À voir sur place */}
             <div className="mt-4 pt-3 border-t border-slate-100">
@@ -408,6 +485,14 @@
                 <li className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0" />Points d'intérêt locaux</li>
               </ul>
             </div>
+
+            {/* Explication dynamique si le WeatherScore est impacté */}
+            {(showWindExplanation || malusSoleil) && (
+              <div className="mt-3 pt-3 border-t border-slate-100 space-y-1">
+                {showWindExplanation && <p className="text-xs text-slate-500">Le vent réduit le confort sur place.</p>}
+                {malusSoleil && <p className="text-xs text-slate-500">Manque d'ensoleillement prévu.</p>}
+              </div>
+            )}
           </div>
         </div>
       );
@@ -417,11 +502,10 @@
     function App() {
       const [position, setPosition] = useState(null);
       const [travelTimeIndex, setTravelTimeIndex] = useState(3);
-      const [placesData, setPlacesData] = useState([]);
       const [cities, setCities] = useState([]);
       const [isFallbackMode, setIsFallbackMode] = useState(false);
       const [isOutsideRadius, setIsOutsideRadius] = useState(false);
-      const [loading, setLoading] = useState(true);
+      const [loading, setLoading] = useState(false);
       const [error, setError] = useState(null);
       const [selectedCity, setSelectedCity] = useState(null);
       const [sortBy, setSortBy] = useState('distance');
@@ -436,14 +520,20 @@
       const travelTimeMin = TRAVEL_TIME_PRESETS_MIN[Math.min(travelTimeIndex, TRAVEL_TIME_PRESETS_MIN.length - 1)];
       const radiusKm = travelTimeToRadiusKm(travelTimeMin);
 
-      function sunScore(city) {
+      // WeatherScore 0–100 : météo pure (temp 50 %, vent 50 %). Malus ×0,5 si pas ensoleillé/ciel dégagé.
+      function weatherScore(city) {
         const t = (city.feelsLike != null ? city.feelsLike : city.temp) ?? 20;
         const w = city.wind_speed != null ? city.wind_speed : 10;
-        const dist = position ? haversine(position.lat, position.lon, city.lat, city.lon) : 0;
         const tempScore = Math.max(0, 100 - 4 * Math.abs(t - 25));
-        const windScore = Math.max(0, 100 - 5 * w);
-        const distScore = Math.max(0, 100 - 0.3 * dist);
-        return (tempScore + windScore + distScore) / 3;
+        // Vent : -2 pts/km/h jusqu'à 20 km/h, puis -4 pts/km/h au-delà
+        const windScore = w <= 20
+          ? Math.max(0, 100 - 2 * w)
+          : Math.max(0, 60 - 4 * (w - 20));
+        let score = (tempScore * 0.5) + (windScore * 0.5);
+        if (t < 15 && w > 25) score -= 20; // ressenti glacial
+        const isSunny = SUN_CODES.includes(city.weather_code ?? -1);
+        if (!isSunny) score *= 0.5;
+        return Math.max(0, Math.min(100, score));
       }
 
       const displayedCities = useMemo(() => {
@@ -469,69 +559,61 @@
         }
         else if (sortBy === 'calm') list.sort((a, b) => (a.wind_speed ?? 999) - (b.wind_speed ?? 999));
         else if (sortBy === 'clearest') list.sort((a, b) => (a.cloud_cover ?? 999) - (b.cloud_cover ?? 999));
-        else if (sortBy === 'sunscore') list.sort((a, b) => sunScore(b) - sunScore(a));
+        else if (sortBy === 'sunscore') {
+          list.sort((a, b) => {
+            const sa = weatherScore(a), sb = weatherScore(b);
+            if (sb !== sa) return sb - sa;
+            if (!position) return 0;
+            return haversine(position.lat, position.lon, a.lat, a.lon) - haversine(position.lat, position.lon, b.lat, b.lon);
+          });
+        }
         return list;
       }, [cities, sortBy, minTemp, maxWindKmh, minWeatherLevel, position]);
 
-      // Lieux : chargés via places.js (fallback hors ligne)
-      useEffect(() => {
-        const raw = typeof window.SUNAPP_PLACES !== 'undefined' ? window.SUNAPP_PLACES : [];
-        const list = Array.isArray(raw) ? raw.map((p, i) => ({
-          id: 'p' + i,
-          name: p[0] || 'Sans nom',
-          lat: Number(p[1]),
-          lon: Number(p[2]),
-          type: p[3] || 'lieu',
-        })).filter((p) => !isNaN(p.lat) && !isNaN(p.lon)) : [];
-        setPlacesData(list);
-      }, []);
-
-      // Récupère les lieux depuis OpenStreetMap (Overpass API) — pas de liste en dur
-      async function fetchOverpassPlaces(lat, lon, radiusMeters) {
-        const r = Math.round(radiusMeters);
-        const queryFull = `[out:json][timeout:25];(node["place"~"^city$|^town$|^village$|^suburb$"](around:${r},${lat},${lon});node["leisure"="park"](around:${r},${lat},${lon});node["natural"="beach"](around:${r},${lat},${lon});node["tourism"~"^resort$|^beach_resort$|^theme_park$"](around:${r},${lat},${lon}););out body;`;
-        const queryShort = `[out:json][timeout:20];node["place"~"city|town|village|suburb"](around:${r},${lat},${lon});out body;`;
-        const endpoints = [
-          'https://overpass.kumi.systems/api/interpreter',
-          'https://overpass-api.de/api/interpreter',
-        ];
-        let data = null;
-        let lastStatus = 0;
-        for (const url of endpoints) {
-          try {
-            let res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(queryFull), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-            lastStatus = res.status;
-            if (res.status === 429) throw new Error('Trop de requêtes vers le serveur de lieux. Réessayez dans 1 à 2 minutes.');
-            if (res.status === 504 || res.status === 502) continue;
-            if (!res.ok) {
-              const getUrl = url + '?data=' + encodeURIComponent(queryShort);
-              res = await fetch(getUrl);
-              lastStatus = res.status;
-              if (res.status === 429) throw new Error('Trop de requêtes. Réessayez dans une minute.');
+      function generateSearchGrid(lat, lon, radiusKm, stepKm = 15, maxPoints = 320) {
+        const points = [];
+        const degLatPerKm = 1 / 111;
+        const latStep = stepKm * degLatPerKm;
+        const lonStep = stepKm / (111 * Math.max(Math.cos((lat * Math.PI) / 180), 0.2));
+        const latDelta = radiusKm * degLatPerKm;
+        const lonDelta = radiusKm / (111 * Math.max(Math.cos((lat * Math.PI) / 180), 0.2));
+        for (let y = -latDelta; y <= latDelta; y += latStep) {
+          for (let x = -lonDelta; x <= lonDelta; x += lonStep) {
+            const pLat = lat + y;
+            const pLon = lon + x;
+            if (haversine(lat, lon, pLat, pLon) <= radiusKm) {
+              points.push({ lat: Number(pLat.toFixed(5)), lon: Number(pLon.toFixed(5)) });
             }
-            if (res.ok) {
-              data = await res.json();
-              if (data && data.elements && data.elements.length > 0) break;
-            }
-          } catch (e) {
-            if (e.message && e.message.includes('Trop de requêtes')) throw e;
           }
         }
-        if (!data || !data.elements || data.elements.length === 0) {
-          if (lastStatus === 429) throw new Error('Trop de requêtes. Réessayez dans une minute.');
-          throw new Error('Lieux indisponibles. Réessayez dans un instant ou vérifiez votre connexion.');
+        if (points.length <= maxPoints) return points;
+        const stride = points.length / maxPoints;
+        const sampled = [];
+        for (let i = 0; i < maxPoints; i++) sampled.push(points[Math.floor(i * stride)]);
+        return sampled;
+      }
+
+      async function reverseGeocodeFrBatch(points) {
+        const lookupOne = async (p, idx) => {
+          const url = `https://api-adresse.data.gouv.fr/reverse/?lon=${p.lon}&lat=${p.lat}`;
+          try {
+            const res = await fetch(url);
+            if (!res.ok) return null;
+            const data = await res.json();
+            const feat = data?.features?.[0];
+            const props = feat?.properties || {};
+            const label = props.city || props.name || props.label || `Zone ${idx + 1}`;
+            return { ...p, name: label, type: props.type || 'zone' };
+          } catch (e) {
+            return null;
+          }
+        };
+        const out = [];
+        for (let i = 0; i < points.length; i++) {
+          const item = await lookupOne(points[i], i);
+          out.push(item || { ...points[i], name: `Zone ${i + 1}`, type: 'zone' });
         }
-        const seen = new Set();
-        return data.elements.map((el) => {
-          const lat = el.lat ?? el.center?.lat;
-          const lon = el.lon ?? el.center?.lon ?? el.center?.lng;
-          const name = el.tags?.name || el.tags?.['name:fr'] || 'Sans nom';
-          const type = el.tags?.place || el.tags?.leisure || el.tags?.natural || (el.tags?.tourism ? 'resort' : null) || 'place';
-          const key = `${lat?.toFixed(4)}-${lon?.toFixed(4)}`;
-          if (seen.has(key) || lat == null || lon == null) return null;
-          seen.add(key);
-          return { id: 'osm' + el.id, name, lat, lon, type };
-        }).filter(Boolean);
+        return out;
       }
 
       // Géolocalisation au chargement
@@ -559,7 +641,7 @@
         );
       }, []);
 
-      // Lieux (Overpass API en priorité, places.js en secours) + Météo (Open-Meteo)
+      // Recherche météo par maillage (grille dans le rayon) + Open-Meteo batch + API Géo
       async function runSearch() {
         if (!position) return;
         setLoading(true);
@@ -568,52 +650,64 @@
         setIsFallbackMode(false);
         setIsOutsideRadius(false);
 
-        const radiusMeters = radiusKm * 1000;
-
-        const EXCLUDED_TYPES = ['locality', 'hamlet', 'isolated_dwelling'];
-        let pool = [];
-        try {
-          pool = await fetchOverpassPlaces(position.lat, position.lon, radiusMeters);
-        } catch (e) {
+        const grid = generateSearchGrid(position.lat, position.lon, radiusKm, 15, 320);
+        if (grid.length === 0) {
+          setError('Aucun point de recherche disponible. Élargissez le rayon.');
           setLoading(false);
-          setError(e.message || 'Impossible de charger les lieux. Lancez l\'app depuis un serveur local (npx serve) pour activer la recherche.');
-          return;
-        }
-        pool = pool.filter((p) => !EXCLUDED_TYPES.includes((p.type || '').toLowerCase()));
-
-        if (pool.length === 0) {
-          setLoading(false);
-          setError('Aucun lieu trouvé dans ce rayon. Élargissez le rayon.');
           return;
         }
 
-        const withDist = pool.map((p) => ({ ...p, _dist: haversine(position.lat, position.lon, p.lat, p.lon) }));
-        const inRadius = withDist.filter((p) => p._dist <= radiusKm);
-        setIsOutsideRadius(inRadius.length === 0);
-        const source = inRadius.length > 0 ? inRadius : withDist;
-        const candidates = source
-          .sort((a, b) => a._dist - b._dist)
-          .slice(0, 60)
-          .map(({ _dist, ...p }) => p);
-
-        if (candidates.length === 0) {
-          setLoading(false);
-          setError('Aucun lieu à proximité. Élargissez le rayon ou vérifiez votre connexion.');
-          return;
-        }
-
-        const batch1 = candidates.slice(0, 30);
-        const batch2 = candidates.slice(30, 60);
-
-        function mergeMeteo(places, results, isArray) {
+        function mergeMeteo(points, results) {
           const list = Array.isArray(results) ? results : [results];
-          return places.map((p, i) => {
+          const now = new Date();
+          return points.map((p, i) => {
             const r = list[i];
             const cur = r?.current || {};
+            // Si données météo incomplètes, on ignore ce point (pas de fallback arbitraire)
+            if (cur.temperature_2m == null || cur.wind_speed_10m == null || cur.weather_code == null) return null;
+            const hourly = r?.hourly || {};
             const temp = cur.temperature_2m;
             const wind = cur.wind_speed_10m;
             const feelsLike = windChill(temp, wind);
+            const times = hourly.time || [];
+            const temps = hourly.temperature_2m || [];
+            const winds = hourly.wind_speed_10m || [];
+            const codes = hourly.weather_code || [];
+            let hourlyTrend = [];
+            let trendTimes = [];
+            const currentScore = weatherScoreFromSlot(feelsLike ?? temp, wind, cur.weather_code);
+            hourlyTrend.push(currentScore);
+            trendTimes.push('Maintenant');
+            let idx = 0;
+            for (let j = 0; j < times.length; j++) {
+              const slotTime = new Date(times[j]);
+              if (slotTime > now) { idx = j; break; }
+            }
+            for (let k = 0; k < 4 && idx + k < times.length; k++) {
+              const j = idx + k;
+              const t = temps[j];
+              const w = winds[j];
+              const code = codes[j];
+              const felt = windChill(t, w) ?? t;
+              hourlyTrend.push(weatherScoreFromSlot(felt, w, code));
+              const d = new Date(times[j]);
+              trendTimes.push(d.getHours() + 'h');
+            }
+            while (hourlyTrend.length < 5) {
+              hourlyTrend.push(currentScore);
+              trendTimes.push(trendTimes[trendTimes.length - 1] || '—');
+            }
+            const avgFuture = hourlyTrend.length > 1
+              ? hourlyTrend.slice(1).reduce((a, b) => a + b, 0) / (hourlyTrend.length - 1)
+              : currentScore;
+            const improvesSoon = hourlyTrend.length > 1 && (avgFuture >= currentScore * 1.2);
+            const peakIndex = hourlyTrend.length > 1 ? hourlyTrend.indexOf(Math.max(...hourlyTrend)) : 0;
+            const showPeak = peakIndex > 0 && hourlyTrend[peakIndex] > currentScore + 10;
+
             return {
+              id: `grid-${i}`,
+              name: `Zone ${i + 1}`,
+              type: 'zone',
               ...p,
               temp,
               feelsLike: feelsLike != null ? feelsLike : temp,
@@ -622,77 +716,88 @@
               humidity: cur.relative_humidity_2m,
               cloud_cover: cur.cloud_cover,
               _dist: haversine(position.lat, position.lon, p.lat, p.lon),
+              weatherScore100: currentScore,
+              hourlyTrend: hourlyTrend.slice(0, 5),
+              trendTimes: trendTimes.slice(0, 5),
+              improvesSoon: !!improvesSoon,
+              peakIndex: showPeak ? peakIndex : -1,
             };
-          });
-        }
-
-        function sortAndTakeBest(list, n = 30) {
-          const byBestWeather = (a, b) => {
-            const sunA = SUN_CODES.includes(a.weather_code) ? 1 : 0;
-            const sunB = SUN_CODES.includes(b.weather_code) ? 1 : 0;
-            if (sunB !== sunA) return sunB - sunA;
-            const feltA = a.feelsLike ?? a.temp ?? -999;
-            const feltB = b.feelsLike ?? b.temp ?? -999;
-            if (Math.abs(feltB - feltA) >= 0.5) return feltB - feltA;
-            return (a._dist ?? 0) - (b._dist ?? 0);
-          };
-          const sorted = [...list].sort(byBestWeather).slice(0, n);
-          const sunny = sorted.filter((c) => SUN_CODES.includes(c.weather_code));
-          const rest = sorted.filter((c) => !SUN_CODES.includes(c.weather_code));
-          const byDist = (a, b) => (a._dist ?? 0) - (b._dist ?? 0);
-          const sunnySorted = sunny.sort(byDist);
-          const restSorted = rest.sort((a, b) => {
-            const codeA = a.weather_code ?? 99, codeB = b.weather_code ?? 99;
-            if (codeA !== codeB) return codeA - codeB;
-            return byDist(a, b);
-          });
-          return sunnySorted.length > 0 ? [...sunnySorted, ...restSorted] : restSorted;
+          }).filter(Boolean);
         }
 
         try {
           const baseUrl = 'https://api.open-meteo.com/v1/forecast';
-          const params = 'current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,cloud_cover&timezone=auto';
-
-          const fetchMeteo = (places) => {
-            if (places.length === 0) return Promise.resolve([]);
-            const latStr = places.map((p) => p.lat).join(',');
-            const lonStr = places.map((p) => p.lon).join(',');
+          const params = 'current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m,cloud_cover&hourly=temperature_2m,weather_code,wind_speed_10m&forecast_days=1&timezone=auto';
+          const fetchMeteoBatch = async (pts) => {
+            const latStr = pts.map((p) => p.lat).join(',');
+            const lonStr = pts.map((p) => p.lon).join(',');
             const url = `${baseUrl}?latitude=${latStr}&longitude=${lonStr}&${params}`;
-            return fetch(url)
-              .then((r) => (!r.ok ? fetch('https://corsproxy.io/?' + encodeURIComponent(url)) : r))
-              .then((r) => r.ok ? r.json() : Promise.reject(new Error('Météo indisponible')))
-              .then((data) => mergeMeteo(places, data, Array.isArray(data)));
+            const meteoRes = await fetch(url);
+            return meteoRes.ok
+              ? meteoRes.json()
+              : fetch('https://corsproxy.io/?' + encodeURIComponent(url))
+                .then((r) => r.ok ? r.json() : Promise.reject(new Error('Météo indisponible')));
           };
 
-          const promise1 = fetchMeteo(batch1);
-          const promise2 = fetchMeteo(batch2);
-          let fullResultShown = false;
-
-          promise1.then((withWeather1) => {
-            if (withWeather1.length === 0) return;
-            if (fullResultShown) return;
-            const first30 = sortAndTakeBest(withWeather1, 30);
-            setIsFallbackMode(first30.filter((c) => SUN_CODES.includes(c.weather_code)).length === 0 && first30.length > 0);
-            setCities(first30);
-            setLoading(false);
-          }).catch(() => {});
-
-          Promise.all([promise1, promise2]).then(([w1, w2]) => {
-            fullResultShown = true;
-            const combined = [...(w1 || []), ...(w2 || [])];
-            if (combined.length === 0) return;
-            const best30 = sortAndTakeBest(combined, 30);
-            const hasSunny = best30.some((c) => SUN_CODES.includes(c.weather_code));
-            setIsFallbackMode(!hasSunny && best30.length > 0);
-            setCities(best30);
-            setLoading(false);
-          }).catch((err) => {
-            setError(err.message || 'Météo indisponible. Réessayez.');
-            setCities([]);
-            setLoading(false);
-          });
+          // Tentative en une requête ; fallback chunké si la réponse est partielle/incomplète
+          let meteoData = await fetchMeteoBatch(grid);
+          let scored = mergeMeteo(grid, meteoData);
+          if (scored.length < Math.max(20, Math.floor(grid.length * 0.6))) {
+            const chunkSize = 80;
+            const chunks = [];
+            for (let i = 0; i < grid.length; i += chunkSize) chunks.push(grid.slice(i, i + chunkSize));
+            const partials = await Promise.all(chunks.map(async (chunk, chunkIdx) => {
+              const data = await fetchMeteoBatch(chunk);
+              return mergeMeteo(chunk, data).map((p, j) => ({ ...p, id: `grid-${chunkIdx}-${j}` }));
+            }));
+            scored = partials.flat();
+          }
+          if (scored.length === 0) throw new Error('Aucune donnée météo exploitable dans le rayon.');
+          const byScoreThenDist = (a, b) => {
+            const sDiff = (b.weatherScore100 ?? 0) - (a.weatherScore100 ?? 0);
+            if (sDiff !== 0) return sDiff;
+            return (a._dist ?? 0) - (b._dist ?? 0);
+          };
+          const pickTopWithDistanceSpread = (list, n = 20) => {
+            const rings = 5;
+            const perRing = Math.max(1, Math.floor(n / rings));
+            const picked = [];
+            const used = new Set();
+            const maxD = Math.max(radiusKm, 1);
+            for (let r = 0; r < rings; r++) {
+              const minD = (maxD * r) / rings;
+              const maxRingD = (maxD * (r + 1)) / rings;
+              const ringItems = list
+                .filter((p) => (p._dist ?? 0) >= minD && (r === rings - 1 ? (p._dist ?? 0) <= maxRingD : (p._dist ?? 0) < maxRingD))
+                .sort(byScoreThenDist);
+              for (let i = 0; i < ringItems.length && i < perRing; i++) {
+                if (picked.length >= n) break;
+                const p = ringItems[i];
+                if (used.has(p.id)) continue;
+                picked.push(p);
+                used.add(p.id);
+              }
+            }
+            if (picked.length < n) {
+              for (const p of [...list].sort(byScoreThenDist)) {
+                if (picked.length >= n) break;
+                if (used.has(p.id)) continue;
+                picked.push(p);
+                used.add(p.id);
+              }
+            }
+            return picked;
+          };
+          const top20 = pickTopWithDistanceSpread(scored, 20);
+          const namedTop20 = await reverseGeocodeFrBatch(top20);
+          const finalList = namedTop20
+            .map((p, i) => ({ ...p, id: p.id || `zone-${i}` }))
+            .sort(byScoreThenDist);
+          setIsFallbackMode(finalList.filter((c) => SUN_CODES.includes(c.weather_code)).length === 0 && finalList.length > 0);
+          setCities(finalList);
+          setLoading(false);
         } catch (err) {
-          setError(err.message || 'Erreur. Réessayez.');
+          setError(err.message || 'Recherche météo indisponible. Réessayez.');
           setCities([]);
           setLoading(false);
         }
@@ -700,7 +805,7 @@
 
       useEffect(() => {
         if (position) runSearch();
-      }, [position?.lat, position?.lon, radiusKm, placesData.length]);
+      }, [position?.lat, position?.lon, radiusKm]);
 
       // Carte Leaflet + cercle du rayon de recherche
       useEffect(() => {
@@ -745,9 +850,18 @@
         markersRef.current = [];
         if (displayedCities.length === 0) return;
         displayedCities.forEach((city) => {
-          const m = L.marker([city.lat, city.lon])
+          const score5 = getWeatherScore(city).score;
+          const radiusPx = Math.max(3, 2 + score5 * 2.6);
+          const fill = score5 >= 5 ? '#f97316' : score5 >= 4 ? '#fb923c' : score5 >= 3 ? '#f59e0b' : score5 >= 2 ? '#facc15' : '#9ca3af';
+          const m = L.circleMarker([city.lat, city.lon], {
+            radius: radiusPx,
+            color: fill,
+            fillColor: fill,
+            fillOpacity: 0.8,
+            weight: 1,
+          })
             .addTo(mapInstanceRef.current)
-            .bindPopup(`${city.name} — ${city.temp != null ? Math.round(city.temp) + '°' : '—'}${city.feelsLike != null && Math.round(city.feelsLike) !== Math.round(city.temp) ? ' (ressenti ' + Math.round(city.feelsLike) + '°)' : ''}`);
+            .bindPopup(`${city.name} — ${score5}/5${city.temp != null ? ' • ' + Math.round(city.temp) + '°' : ''}${city.feelsLike != null && Math.round(city.feelsLike) !== Math.round(city.temp) ? ' (ressenti ' + Math.round(city.feelsLike) + '°)' : ''}`);
           markersRef.current.push(m);
         });
       }, [displayedCities]);
@@ -771,7 +885,7 @@
       }
 
       const locationTitle = 'chez vous';
-      const destinationLabel = cities.length === 1 ? '1 lieu trouvé' : `${cities.length} lieux trouvés`;
+      const destinationLabel = cities.length === 1 ? '1 zone trouvée' : `${cities.length} zones trouvées`;
 
       return (
         <div className="min-h-screen p-4 md:p-6 bg-sky-50">
@@ -779,7 +893,6 @@
             <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
               <IconSun className="text-amber-500" /> SunApp
             </h1>
-            <p className="text-slate-600 text-sm mt-1">Rayon d'action : ~{formatTravelTime(travelTimeMin)} en voiture (≈ {radiusKm} km)</p>
           </header>
 
           {/* Rayon d'action + carte juste en dessous pour voir l'interaction */}
@@ -874,7 +987,7 @@
           <div className="bg-white rounded-2xl shadow-lg border border-slate-100 overflow-hidden">
             <div className="bg-[#36A7EB] text-white px-6 py-4 rounded-t-2xl">
               <h2 className="text-lg font-bold">
-                {isFallbackMode ? 'Lieux à proximité (aucun ensoleillé)' : isOutsideRadius ? `Lieux les plus proches (au-delà de ${radiusKm} km)` : `Lieux ensoleillés près de ${locationTitle}`}
+                {isFallbackMode ? 'Zones météo (aucun point ensoleillé)' : isOutsideRadius ? `Zones les plus proches (au-delà de ${radiusKm} km)` : `Zones météo près de ${locationTitle}`}
               </h2>
               <p className="text-sm text-white/90 mt-0.5">
                 {loading && position ? 'Recherche en cours…' : cities.length === 0 && !error ? 'Aucun lieu' : (displayedCities.length !== cities.length ? `${destinationLabel} — ${displayedCities.length} affichés` : destinationLabel)}
@@ -901,7 +1014,7 @@
                         <option value="hottest">Le plus chaud</option>
                         <option value="calm">Le moins de vent</option>
                         <option value="clearest">Ciel le plus pur</option>
-                        <option value="sunscore">Le Choix Parfait (SunScore)</option>
+                        <option value="sunscore">Le Choix Parfait (WeatherScore)</option>
                       </select>
                     </label>
                   )}
@@ -923,12 +1036,12 @@
                 </>
               )}
               {!loading && position && cities.length === 0 && !error && (
-                <p className="text-slate-500 text-center py-8">Aucun lieu trouvé. Augmentez le rayon.</p>
+                <p className="text-slate-500 text-center py-8">Aucune zone trouvée. Augmentez le rayon.</p>
               )}
             </div>
           </div>
           <footer className="mt-8 py-4 text-center text-slate-400 text-sm">
-            Version 0.01
+            Version {APP_VERSION} • Build {APP_BUILD}
           </footer>
         </div>
       );
