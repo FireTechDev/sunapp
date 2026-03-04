@@ -175,7 +175,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 18h59';
+    const APP_BUILD = '04/03/2026 - 19h00';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -933,12 +933,6 @@ out tags center 120;`;
                       </div>
                     </>
                   )}
-                  <div
-                    className="absolute bottom-2 right-2 z-10 px-2 py-1 rounded-md bg-black/45 text-white text-[11px] max-w-[70%] truncate"
-                    title={activeSlide.label || ''}
-                  >
-                    {(activeSlide.distanceM != null ? `${(activeSlide.distanceM / 1000).toFixed(1)} km` : 'Zone locale')}
-                  </div>
                 </>
               ) : null}
               {!activeSlide && (
