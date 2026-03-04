@@ -175,7 +175,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 20h21';
+    const APP_BUILD = '04/03/2026 - 20h27';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -649,8 +649,10 @@
 
     function selectRestaurantIdeas(rawPois, maxItems = MAX_CARD_RESTAURANTS) {
       if (!Array.isArray(rawPois) || rawPois.length === 0) return [];
-      const ranked = rawPois
-        .filter((poi) => poi.categoryKey === 'restaurant')
+      const restaurants = rawPois
+        .filter((poi) => poi.categoryKey === 'restaurant');
+      if (restaurants.length === 0) return [];
+      const scored = restaurants
         .filter((restaurant) => restaurant.reviewScore100 != null)
         .sort((a, b) => {
           const scoreDiff = Number(b.reviewScore100) - Number(a.reviewScore100);
@@ -659,6 +661,10 @@
           if (sourceDiff !== 0) return sourceDiff;
           return (a.distanceM ?? Infinity) - (b.distanceM ?? Infinity);
         });
+      const unscored = restaurants
+        .filter((restaurant) => restaurant.reviewScore100 == null)
+        .sort((a, b) => (a.distanceM ?? Infinity) - (b.distanceM ?? Infinity));
+      const ranked = [...scored, ...unscored];
       const picked = [];
       const usedNames = new Set();
       for (const restaurant of ranked) {
@@ -1463,7 +1469,7 @@ out tags center 120;`;
                           {idx + 1}. {restaurant.name}
                         </p>
                         <p className="text-[11px] text-slate-500">
-                          {restaurant.reviewScore100 != null ? `Score avis ${Math.round(restaurant.reviewScore100)}/100` : 'Score avis indisponible'}
+                          {restaurant.reviewScore100 != null ? `Score avis ${Math.round(restaurant.reviewScore100)}/100` : 'Note web indisponible'}
                           {restaurant.reviewSourceCount > 0 ? ` • ${restaurant.reviewSourceCount} source${restaurant.reviewSourceCount > 1 ? 's' : ''}` : ''}
                           {' • '}
                           {(restaurant.distanceM / 1000).toFixed(1)} km
@@ -1492,7 +1498,7 @@ out tags center 120;`;
                 </ol>
               ) : (
                 <p className="text-xs text-slate-500">
-                  Aucun restaurant classable trouvé (scores Google / TripAdvisor / Restaurant Guru indisponibles dans ce rayon).
+                  Aucun restaurant trouvé dans un rayon de 15 km.
                 </p>
               )}
             </div>
