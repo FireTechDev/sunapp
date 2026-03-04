@@ -521,8 +521,7 @@
         setIsFallbackMode(false);
         setIsOutsideRadius(false);
 
-        const proximityRadius = Math.min(radiusKm * 2, 100);
-        const radiusMeters = proximityRadius * 1000;
+        const radiusMeters = radiusKm * 1000;
 
         const EXCLUDED_TYPES = ['locality', 'hamlet', 'isolated_dwelling'];
         let pool = [];
@@ -544,8 +543,7 @@
         const withDist = pool.map((p) => ({ ...p, _dist: haversine(position.lat, position.lon, p.lat, p.lon) }));
         const inRadius = withDist.filter((p) => p._dist <= radiusKm);
         setIsOutsideRadius(inRadius.length === 0);
-        const inProximity = withDist.filter((p) => p._dist <= proximityRadius);
-        const source = inRadius.length > 0 ? inRadius : inProximity;
+        const source = inRadius.length > 0 ? inRadius : withDist;
         const sorted = source
           .sort((a, b) => a._dist - b._dist)
           .slice(0, 30)
