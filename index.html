@@ -175,7 +175,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 19h45';
+    const APP_BUILD = '04/03/2026 - 19h59';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -339,6 +339,8 @@
 
     const FALLBACK_POSITION = { lat: 48.8566, lon: 2.3522 };
     const LAST_POSITION_STORAGE_KEY = 'sunapp:last-position';
+    const METEO_RATE_LIMIT_STORAGE_KEY = 'sunapp:meteo-rate-limit-until';
+    const METEO_RATE_LIMIT_COOLDOWN_MS = 90 * 1000;
     function loadSavedPosition() {
       try {
         const raw = localStorage.getItem(LAST_POSITION_STORAGE_KEY);
@@ -356,6 +358,27 @@
       try {
         if (!position) return;
         localStorage.setItem(LAST_POSITION_STORAGE_KEY, JSON.stringify({ lat: position.lat, lon: position.lon }));
+      } catch (_) {}
+    }
+    function loadMeteoRateLimitUntil() {
+      try {
+        const raw = localStorage.getItem(METEO_RATE_LIMIT_STORAGE_KEY);
+        const ts = Number(raw);
+        if (!Number.isFinite(ts)) return 0;
+        return ts;
+      } catch (_) {
+        return 0;
+      }
+    }
+    function setMeteoRateLimitUntil(ts) {
+      try {
+        if (!Number.isFinite(Number(ts))) return;
+        localStorage.setItem(METEO_RATE_LIMIT_STORAGE_KEY, String(Math.round(Number(ts))));
+      } catch (_) {}
+    }
+    function clearMeteoRateLimitUntil() {
+      try {
+        localStorage.removeItem(METEO_RATE_LIMIT_STORAGE_KEY);
       } catch (_) {}
     }
 
@@ -1497,6 +1520,17 @@ out tags center 120;`;
         const jitterKm = Math.min(stepKm * 0.22, 2.4);
         const latFactor = 1 / 111;
         const lonFactor = 1 / (111 * Math.max(Math.cos((lat * Math.PI) / 180), 0.2));
+        const dedupePoints = (items) => {
+          const out = [];
+          const seen = new Set();
+          for (const p of items) {
+            const key = `${Number(p.lat).toFixed(5)},${Number(p.lon).toFixed(5)}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push({ lat: Number(p.lat), lon: Number(p.lon) });
+          }
+          return out;
+        };
         const points = [{ lat: Number(lat.toFixed(5)), lon: Number(lon.toFixed(5)), _distKm: 0, _angle: 0 }];
 
         let rowIdx = 0;
@@ -1529,7 +1563,7 @@ out tags center 120;`;
           }
         }
 
-        if (points.length <= maxPoints) return points.map((p) => ({ lat: p.lat, lon: p.lon }));
+        if (points.length <= maxPoints) return dedupePoints(points);
 
         const center = points[0];
         const others = points.slice(1).sort((a, b) => (a._distKm - b._distKm) || (a._angle - b._angle));
@@ -1559,7 +1593,7 @@ out tags center 120;`;
           }
         }
 
-        return sampled.slice(0, maxPoints).map((p) => ({ lat: p.lat, lon: p.lon }));
+        return dedupePoints(sampled.slice(0, maxPoints));
       }
 
       async function reverseGeocodeFrBatch(points, signal) {
@@ -1860,12 +1894,22 @@ out tags center 120;`;
           setLoading(false);
         };
 
+        const nowTs = Date.now();
+        const rateLimitUntil = loadMeteoRateLimitUntil();
+        if (rateLimitUntil > nowTs) {
+          const waitSec = Math.max(1, Math.ceil((rateLimitUntil - nowTs) / 1000));
+          setError(`Limite API météo atteinte. Nouvelle tentative dans ${waitSec}s.`);
+          finishIfCurrent();
+          return;
+        }
+
         setLoading(true);
         setError(null);
         setCities([]);
         setIsFallbackMode(false);
 
-        const grid = generateSearchGrid(position.lat, position.lon, radiusKm, 15, 220);
+        const gridMaxPoints = radiusKm >= 140 ? 180 : radiusKm >= 80 ? 160 : 140;
+        const grid = generateSearchGrid(position.lat, position.lon, radiusKm, 15, gridMaxPoints);
         if (grid.length === 0) {
           setError('Aucun point de recherche disponible. Élargissez le rayon.');
           finishIfCurrent();
@@ -1974,6 +2018,14 @@ out tags center 120;`;
                 : 'Service météo indisponible. Réessayez.'
               );
               err.status = meteoRes.status;
+              if (meteoRes.status === 429) {
+                const retryAfterRaw = meteoRes.headers.get('retry-after');
+                const retryAfterSec = Number(retryAfterRaw);
+                const retryAfterMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0
+                  ? retryAfterSec * 1000
+                  : METEO_RATE_LIMIT_COOLDOWN_MS;
+                err.retryAfterMs = Math.max(METEO_RATE_LIMIT_COOLDOWN_MS, Math.min(5 * 60 * 1000, retryAfterMs));
+              }
               throw err;
             }
             return meteoRes.json();
@@ -2010,15 +2062,23 @@ out tags center 120;`;
             } catch (err) {
               if (err?.name === 'AbortError') throw err;
               if (Number(err?.status) === 429) {
+                const retryAfterMs = Number(err?.retryAfterMs);
+                const cooldownMs = Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? retryAfterMs : METEO_RATE_LIMIT_COOLDOWN_MS;
+                setMeteoRateLimitUntil(Date.now() + cooldownMs);
                 rateLimited = true;
                 break;
               }
             }
           }
           if (rateLimited && scored.length < 10) {
-            throw new Error('Limite API météo atteinte (429). Réessayez dans 1 minute.');
+            const cooldownUntil = loadMeteoRateLimitUntil();
+            const waitSec = cooldownUntil > Date.now()
+              ? Math.max(1, Math.ceil((cooldownUntil - Date.now()) / 1000))
+              : 60;
+            throw new Error(`Limite API météo atteinte (429). Réessayez dans ${waitSec}s.`);
           }
           if (scored.length === 0) throw new Error('Aucune donnée météo exploitable dans le rayon.');
+          if (!rateLimited) clearMeteoRateLimitUntil();
           const byScoreThenDist = (a, b) => {
             const sDiff = (b.weatherScore100 ?? 0) - (a.weatherScore100 ?? 0);
             if (sDiff !== 0) return sDiff;
@@ -2072,7 +2132,11 @@ out tags center 120;`;
       }
 
       useEffect(() => {
-        if (position) runSearch();
+        if (!position) return;
+        const timer = window.setTimeout(() => {
+          runSearch();
+        }, 600);
+        return () => window.clearTimeout(timer);
       }, [position?.lat, position?.lon, radiusKm]);
 
       useEffect(() => {

@@ -77,6 +77,11 @@ async function networkFirst(request, cacheName, timeoutMs = 9000) {
   const cache = await caches.open(cacheName);
   try {
     const response = await fetchWithTimeout(request, timeoutMs);
+    if (response.status === 429 || response.status >= 500) {
+      const cached = await cache.match(request);
+      if (cached) return cached;
+      return response;
+    }
     if (isCacheableResponse(response)) {
       await safeCachePut(cache, request, response.clone());
     }
