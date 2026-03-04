@@ -187,7 +187,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 21h24';
+    const APP_BUILD = '04/03/2026 - 21h33';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -1292,14 +1292,21 @@ out tags center 120;`;
         : `${bestDayLabel} ${bestHourLabel}`.trim();
 
       let weekendSummary = null;
+      let weekendMapSummary = null;
       if (scopeInfo.key === 'weekend') {
         const daySummaries = (scopeInfo.dayDates || []).map((date) => {
           const dayKey = toLocalDayKey(date);
           const daySlots = (hourlySlots || []).filter((slot) => slot.dayKey === dayKey && slot.hour >= WINDOW_START_HOUR && slot.hour <= WINDOW_END_HOUR);
           const mood = describeDayMood(daySlots);
-          return `${mood.icon} ${formatFrenchDayLabel(date)} ${mood.label}`;
+          const dayFull = formatFrenchDayLabel(date);
+          const dayShort = String(new Intl.DateTimeFormat('fr-FR', { weekday: 'short' }).format(date)).replace('.', '');
+          return {
+            full: `${mood.icon} ${dayFull} ${mood.label}`,
+            compact: `${mood.icon} ${capitalizeFirst(dayShort)}`,
+          };
         });
-        weekendSummary = daySummaries.filter(Boolean).join(' / ');
+        weekendSummary = daySummaries.map((d) => d.full).filter(Boolean).join(' / ');
+        weekendMapSummary = daySummaries.map((d) => d.compact).filter(Boolean).join(' / ');
       }
 
       const roundedFeels = bestSlot.feelsLike != null
@@ -1307,8 +1314,8 @@ out tags center 120;`;
         : (bestSlot.temp != null ? Math.round(bestSlot.temp) : null);
       const roundedWind = bestSlot.windKmh != null ? Math.round(bestSlot.windKmh) : null;
       const fallbackBadge = `${getWeatherIcon(bestSlot.weatherCode)} ${roundedFeels != null ? `${roundedFeels}°` : '—'} - ${roundedWind != null ? `${roundedWind} kmh` : '— kmh'}`;
-      const mapBadgeLabel = weekendSummary || fallbackBadge;
-      const timeScopeSummary = weekendSummary || `Créneau retenu : ${bestSlotLabel} (${WINDOW_START_HOUR}h-${WINDOW_END_HOUR}h)`;
+      const mapBadgeLabel = weekendMapSummary || fallbackBadge;
+      const timeScopeSummary = weekendSummary || bestSlotLabel;
 
       return {
         temp: bestSlot.temp ?? null,
@@ -1699,17 +1706,9 @@ out tags center 120;`;
               </div>
             </div>
 
-            {(scopeSummary || reliability) && (
+            {scopeSummary && (
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                {scopeSummary && (
-                  <span className="text-slate-600">{scopeSummary}</span>
-                )}
-                {reliability && (
-                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border ${reliability.className || 'border-slate-200 bg-slate-50 text-slate-600'}`}>
-                    <span aria-hidden="true">{reliability.icon || 'ℹ️'}</span>
-                    <span>{reliability.shortLabel || reliability.label || 'Fiabilité'}</span>
-                  </span>
-                )}
+                <span className="text-slate-600">{scopeSummary}</span>
               </div>
             )}
 
@@ -1736,6 +1735,12 @@ out tags center 120;`;
                   {city.wind_speed != null ? `${Math.round(Number(city.wind_speed))} km/h` : '—'}
                 </span>
               </div>
+              {reliability && (
+                <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] ${reliability.className || 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+                  <span aria-hidden="true">{reliability.icon || 'ℹ️'}</span>
+                  <span>{reliability.shortLabel || reliability.label || 'Fiabilité'}</span>
+                </div>
+              )}
             </div>
 
             {/* Tendance sur 5 h */}
@@ -2829,7 +2834,6 @@ out tags center 120;`;
           ? 'GPS non disponible: dernière position enregistrée utilisée.'
           : 'GPS non disponible: position de secours utilisée.';
       const destinationLabel = scopedCities.length === 1 ? '1 zone trouvée' : `${scopedCities.length} zones trouvées`;
-      const activeScopeReliability = activeScopeInfo?.reliability || FORECAST_RELIABILITY_META.high;
 
       return (
         <div className="min-h-screen p-4 md:p-6 bg-sky-50">
@@ -2856,11 +2860,7 @@ out tags center 120;`;
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                 <span className="text-slate-600">
-                  Fenêtre de scoring {WINDOW_START_HOUR}h-{WINDOW_END_HOUR}h • {activeScopeInfo?.dateHint || ''}
-                </span>
-                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border ${activeScopeReliability.className}`}>
-                  <span aria-hidden="true">{activeScopeReliability.icon}</span>
-                  <span>{activeScopeReliability.label}</span>
+                  {activeScopeInfo?.dateHint || ''}
                 </span>
               </div>
             </div>
