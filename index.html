@@ -187,7 +187,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 21h48';
+    const APP_BUILD = '04/03/2026 - 22h02';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -1991,6 +1991,10 @@ out tags center 120;`;
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState(null);
       const [requestingGeo, setRequestingGeo] = useState(false);
+      const [manualCityQuery, setManualCityQuery] = useState('');
+      const [manualCityLabel, setManualCityLabel] = useState('');
+      const [manualCityLoading, setManualCityLoading] = useState(false);
+      const [manualCityError, setManualCityError] = useState('');
       const [selectedCity, setSelectedCity] = useState(null);
       const [sortBy, setSortBy] = useState('sunscore');
       const [minTemp, setMinTemp] = useState(15);
@@ -2386,6 +2390,8 @@ out tags center 120;`;
             const nextPos = { lat: pos.coords.latitude, lon: pos.coords.longitude };
             setPosition(nextPos);
             setPositionSource('geo');
+            setManualCityLabel('');
+            setManualCityError('');
             savePosition(nextPos);
             setError(null);
             setRequestingGeo(false);
@@ -2402,6 +2408,61 @@ out tags center 120;`;
           { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
         );
       }, []);
+
+      const applyManualCity = useCallback(async () => {
+        const query = String(manualCityQuery || '').trim();
+        if (query.length < 2) {
+          setManualCityError('Saisissez une ville valide.');
+          return;
+        }
+        setManualCityLoading(true);
+        setManualCityError('');
+        try {
+          const url = `https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(query)}&limit=5`;
+          const res = await fetch(url, {
+            headers: { Accept: 'application/json' },
+          });
+          if (!res.ok) {
+            throw new Error('Service de recherche de ville indisponible.');
+          }
+          const data = await res.json();
+          const features = Array.isArray(data?.features) ? data.features : [];
+          const best = features.find((feature) => {
+            const coords = feature?.geometry?.coordinates;
+            return Array.isArray(coords)
+              && coords.length >= 2
+              && Number.isFinite(Number(coords[0]))
+              && Number.isFinite(Number(coords[1]));
+          });
+          if (!best) {
+            throw new Error('Ville introuvable. Essayez avec un nom plus précis.');
+          }
+          const coords = best.geometry.coordinates;
+          const lon = Number(coords[0]);
+          const lat = Number(coords[1]);
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+            throw new Error('Coordonnées de ville invalides.');
+          }
+          const props = best?.properties || {};
+          const label = String(props.city || props.name || props.label || query)
+            .split(',')[0]
+            .trim();
+          const nextPos = {
+            lat: Number(lat.toFixed(5)),
+            lon: Number(lon.toFixed(5)),
+          };
+          setPosition(nextPos);
+          setPositionSource('manual');
+          setManualCityLabel(label || query);
+          setManualCityQuery(label || query);
+          savePosition(nextPos);
+          setError(null);
+        } catch (err) {
+          setManualCityError(err?.message || 'Recherche de ville impossible. Réessayez.');
+        } finally {
+          setManualCityLoading(false);
+        }
+      }, [manualCityQuery]);
 
       // Tentative initiale (non bloquante), puis bouton manuel possible
       useEffect(() => {
@@ -2772,7 +2833,11 @@ out tags center 120;`;
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
           attribution: '© OpenStreetMap',
         }).addTo(map);
-        const userMarkerLabel = positionSource === 'geo' ? 'Vous êtes ici' : 'Position utilisée (sans GPS)';
+        const userMarkerLabel = positionSource === 'geo'
+          ? 'Vous êtes ici'
+          : positionSource === 'manual'
+            ? (manualCityLabel ? `Départ: ${manualCityLabel}` : 'Ville de départ choisie')
+            : 'Position utilisée (sans GPS)';
         L.marker([position.lat, position.lon]).addTo(map).bindPopup(userMarkerLabel);
         const circle = L.circle([position.lat, position.lon], {
           radius: radiusKm * 1000,
@@ -2791,7 +2856,7 @@ out tags center 120;`;
           }
           circleRef.current = null;
         };
-      }, [position, positionSource, fitMapToRadius]);
+      }, [position, positionSource, fitMapToRadius, manualCityLabel]);
 
       useEffect(() => {
         if (circleRef.current && mapInstanceRef.current) {
@@ -2858,6 +2923,8 @@ out tags center 120;`;
       const isSecureGeoContext = window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
       const geoBannerText = positionSource === 'geo'
         ? 'Position GPS active.'
+        : positionSource === 'manual'
+          ? `Point de départ: ${manualCityLabel || 'ville choisie'}.`
         : positionSource === 'saved'
           ? 'GPS non disponible: dernière position enregistrée utilisée.'
           : 'GPS non disponible: position de secours utilisée.';
@@ -2963,6 +3030,34 @@ out tags center 120;`;
                 {requestingGeo ? 'Localisation…' : 'Utiliser ma position'}
               </button>
             </div>
+            <form
+              className="mt-2 flex flex-wrap items-center gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                applyManualCity();
+              }}
+            >
+              <input
+                type="text"
+                value={manualCityQuery}
+                onChange={(e) => {
+                  setManualCityQuery(e.target.value);
+                  if (manualCityError) setManualCityError('');
+                }}
+                placeholder="Ville de départ (ex: Lyon)"
+                className="flex-1 min-w-[180px] rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-200"
+              />
+              <button
+                type="submit"
+                disabled={manualCityLoading}
+                className="px-2.5 py-1 rounded-md border border-slate-200 bg-slate-50 text-slate-600 text-xs font-medium hover:bg-slate-100 disabled:opacity-60"
+              >
+                {manualCityLoading ? 'Recherche…' : 'Utiliser cette ville'}
+              </button>
+            </form>
+            {manualCityError && (
+              <p className="text-[11px] text-rose-600 mt-1">{manualCityError}</p>
+            )}
             <p className="text-[11px] text-slate-500 mt-1.5">
               {isSecureGeoContext
                 ? 'Si le GPS est refusé, l’app continue avec une position de secours.'
