@@ -152,6 +152,35 @@
     };
     const WEATHER_LEVEL_LABELS = ['Tout temps', 'Pas de neige ni orage', 'Pas de pluie', 'Nuages OK', 'Soleil uniquement'];
 
+    // Score météo 0-5 pour affichage sur les cartes (tag sur l'image)
+    const WEATHER_SCORE_CONFIG = [
+      { score: 0, emoji: '💩', label: 'Nul', desc: 'Pluie battante, vent violent ou froid polaire. On reste à l\'abri !' },
+      { score: 1, emoji: '⛈️', label: 'Médiocre', desc: 'Grisaille dominante, petit vent frais. Pas l\'idéal pour une sortie.' },
+      { score: 2, emoji: '⛅', label: 'Passable', desc: 'Quelques éclaircies mais le fond de l\'air reste frais ou instable.' },
+      { score: 3, emoji: '🌤️', label: 'Agréable', desc: 'Le soleil est là, le vent est calme. Une bonne journée pour s\'aérer !' },
+      { score: 4, emoji: '☀️', label: 'Radieux', desc: 'Grand ciel bleu, température idéale. On sort les lunettes de soleil !' },
+      { score: 5, emoji: '😎', label: 'Parfait', desc: 'Conditions de carte postale : chaud, sans vent et 100% ensoleillé !' },
+    ];
+    function getWeatherScore(city) {
+      const code = city.weather_code ?? 99;
+      const felt = city.feelsLike ?? city.temp ?? 15;
+      const wind = city.wind_speed ?? 0;
+      const sunny = SUN_CODES.includes(code);
+      const rainSnowStorm = [51,53,55,56,57,61,63,65,66,67,71,73,75,77,80,81,82,85,86,95,96,99].includes(code);
+      const overcastFog = [3,45,48].includes(code);
+      let raw = 2;
+      if (rainSnowStorm || felt < 0 || wind > 70) raw = 0;
+      else if (overcastFog || felt < 8 || wind > 50) raw = 1;
+      else if (sunny && felt >= 22 && wind < 15) raw = 5;
+      else if (sunny && felt >= 20 && wind < 30) raw = 4;
+      else if (sunny && felt >= 15) raw = 3;
+      else if (sunny || code === 2) raw = felt >= 12 ? 3 : 2;
+      else raw = felt >= 10 ? 2 : 1;
+      if (raw === 5 && wind >= 30) raw = 4;
+      const config = WEATHER_SCORE_CONFIG[Math.min(raw, 5)];
+      return { ...config, score: raw };
+    }
+
     // Rayon d'action : temps de trajet → rayon approximatif (vitesse moyenne 70 km/h, routes mixtes)
     const TRAVEL_TIME_PRESETS_MIN = [15, 30, 45, 60, 90, 120, 150, 180];
     const AVG_DRIVE_SPEED_KMH = 70;
@@ -278,6 +307,7 @@
       const driveLabel = driveMin >= 60 ? `${Math.floor(driveMin / 60)} h` + (driveMin % 60 ? ` ${driveMin % 60} min` : '') : `${driveMin} min`;
       const hasSun = SUN_CODES.includes(city.weather_code);
       const weatherLabel = getWeatherLabel(city.weather_code);
+      const weatherScore = getWeatherScore(city);
 
       return (
         <div
@@ -292,6 +322,12 @@
           {/* Photo du lieu (Wikipedia) ou placeholder */}
           <div className="p-3 pb-0">
             <div className="card-visual rounded-xl aspect-[4/3] flex items-center justify-center overflow-hidden bg-slate-100 relative">
+              <div
+                className="absolute bottom-2 left-2 z-10 px-2.5 py-1 rounded-lg bg-black/70 text-white text-sm font-medium shadow"
+                title={weatherScore.desc}
+              >
+                {weatherScore.score}/5 {weatherScore.label} {weatherScore.emoji}
+              </div>
               {placeImageUrl ? (
                 <img
                   src={placeImageUrl}
