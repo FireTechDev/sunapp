@@ -149,7 +149,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 18h07';
+    const APP_BUILD = '04/03/2026 - 18h08';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -777,7 +777,7 @@
                 <span>{dist.toFixed(1)} km</span>
                 <span className="text-slate-400">•</span>
                 <IconClock className="w-4 h-4 text-slate-500 shrink-0" />
-                <span>{driveLabel} en voiture</span>
+                <span>{driveLabel}</span>
                 <a
                   href={`https://www.waze.com/ul?ll=${city.lat},${city.lon}&navigate=yes`}
                   target="_blank"
