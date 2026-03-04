@@ -152,6 +152,17 @@
     };
     const WEATHER_LEVEL_LABELS = ['Tout temps', 'Pas de neige ni orage', 'Pas de pluie', 'Nuages OK', 'Soleil uniquement'];
 
+    // Rayon d'action : temps de trajet → rayon approximatif (vitesse moyenne 70 km/h, routes mixtes)
+    const TRAVEL_TIME_PRESETS_MIN = [15, 30, 45, 60, 90, 120, 150, 180];
+    const AVG_DRIVE_SPEED_KMH = 70;
+    function travelTimeToRadiusKm(minutes) {
+      return Math.round((minutes / 60) * AVG_DRIVE_SPEED_KMH);
+    }
+    function formatTravelTime(minutes) {
+      if (minutes >= 60) return `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ''}`;
+      return `${minutes} min`;
+    }
+
     // Température ressentie (refroidissement éolien) — formule Jagger & Osczevski (T °C, V km/h)
     function windChill(T, V) {
       if (T == null || V == null) return T;
@@ -263,7 +274,7 @@
       }, [city.lat, city.lon]);
 
       const dist = haversine(userLat, userLon, city.lat, city.lon);
-      const driveMin = Math.round((dist / 50) * 60);
+      const driveMin = Math.round((dist / AVG_DRIVE_SPEED_KMH) * 60);
       const driveLabel = driveMin >= 60 ? `${Math.floor(driveMin / 60)} h` + (driveMin % 60 ? ` ${driveMin % 60} min` : '') : `${driveMin} min`;
       const hasSun = SUN_CODES.includes(city.weather_code);
       const weatherLabel = getWeatherLabel(city.weather_code);
@@ -369,8 +380,7 @@
     // ---------- App ----------
     function App() {
       const [position, setPosition] = useState(null);
-      const [radiusKm, setRadiusKm] = useState(150);
-      const [maxTravelMin, setMaxTravelMin] = useState(0);
+      const [travelTimeIndex, setTravelTimeIndex] = useState(3);
       const [placesData, setPlacesData] = useState([]);
       const [cities, setCities] = useState([]);
       const [isFallbackMode, setIsFallbackMode] = useState(false);
@@ -387,6 +397,9 @@
       const markersRef = useRef([]);
       const circleRef = useRef(null);
 
+      const travelTimeMin = TRAVEL_TIME_PRESETS_MIN[Math.min(travelTimeIndex, TRAVEL_TIME_PRESETS_MIN.length - 1)];
+      const radiusKm = travelTimeToRadiusKm(travelTimeMin);
+
       function sunScore(city) {
         const t = (city.feelsLike != null ? city.feelsLike : city.temp) ?? 20;
         const w = city.wind_speed != null ? city.wind_speed : 10;
@@ -397,16 +410,8 @@
         return (tempScore + windScore + distScore) / 3;
       }
 
-      const AVG_SPEED_KMH = 80;
       const displayedCities = useMemo(() => {
         let list = [...cities];
-        if (maxTravelMin > 0 && position) {
-          list = list.filter((c) => {
-            const dist = haversine(position.lat, position.lon, c.lat, c.lon);
-            const estMin = (dist / AVG_SPEED_KMH) * 60;
-            return estMin <= maxTravelMin;
-          });
-        }
         if (minTemp > 0) list = list.filter((c) => {
           const t = c.feelsLike != null ? c.feelsLike : c.temp;
           return t != null && t >= minTemp;
@@ -430,7 +435,7 @@
         else if (sortBy === 'clearest') list.sort((a, b) => (a.cloud_cover ?? 999) - (b.cloud_cover ?? 999));
         else if (sortBy === 'sunscore') list.sort((a, b) => sunScore(b) - sunScore(a));
         return list;
-      }, [cities, sortBy, minTemp, maxWindKmh, minWeatherLevel, maxTravelMin, position]);
+      }, [cities, sortBy, minTemp, maxWindKmh, minWeatherLevel, position]);
 
       // Lieux : chargés via places.js (fallback hors ligne)
       useEffect(() => {
@@ -688,41 +693,27 @@
             <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
               <IconSun className="text-amber-500" /> SunApp
             </h1>
-            <p className="text-slate-600 text-sm mt-1">Lieux ensoleillés à moins de {radiusKm} km</p>
+            <p className="text-slate-600 text-sm mt-1">Rayon d'action : ~{formatTravelTime(travelTimeMin)} en voiture (≈ {radiusKm} km)</p>
           </header>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
             <div className="bg-white rounded-2xl shadow-md border border-slate-100 p-4 lg:col-span-2">
-              <label className="block text-sm font-medium text-slate-700 mb-2">Rayon de recherche : {radiusKm} km</label>
-              <input
-                type="range"
-                min="50"
-                max="300"
-                step="10"
-                value={radiusKm}
-                onChange={(e) => setRadiusKm(Number(e.target.value))}
-                className="w-full h-2 bg-slate-200 rounded-full appearance-none cursor-pointer"
-                style={{ background: `linear-gradient(to right, #36A7EB 0%, #36A7EB ${((radiusKm - 50) / 250) * 100}%, #e2e8f0 ${((radiusKm - 50) / 250) * 100}%, #e2e8f0 100%)` }}
-              />
-              <div className="flex justify-between text-xs text-slate-500 mt-1">
-                <span>50 km</span>
-                <span>300 km</span>
-              </div>
-              <label className="block text-sm font-medium text-slate-700 mt-4 mb-2">Temps de trajet max : {maxTravelMin > 0 ? (maxTravelMin >= 60 ? `${Math.floor(maxTravelMin / 60)} h${maxTravelMin % 60 ? ` ${maxTravelMin % 60} min` : ''}` : `${maxTravelMin} min`) : 'Aucune limite'}</label>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Rayon d'action : ~{formatTravelTime(travelTimeMin)} (≈ {radiusKm} km)</label>
               <input
                 type="range"
                 min="0"
-                max="120"
-                step="15"
-                value={maxTravelMin}
-                onChange={(e) => setMaxTravelMin(Number(e.target.value))}
+                max={TRAVEL_TIME_PRESETS_MIN.length - 1}
+                step="1"
+                value={travelTimeIndex}
+                onChange={(e) => setTravelTimeIndex(Number(e.target.value))}
                 className="w-full h-2 bg-slate-200 rounded-full appearance-none cursor-pointer"
-                style={{ background: `linear-gradient(to right, #36A7EB 0%, #36A7EB ${(maxTravelMin / 120) * 100}%, #e2e8f0 ${(maxTravelMin / 120) * 100}%, #e2e8f0 100%)` }}
+                style={{ background: `linear-gradient(to right, #36A7EB 0%, #36A7EB ${(travelTimeIndex / (TRAVEL_TIME_PRESETS_MIN.length - 1)) * 100}%, #e2e8f0 ${(travelTimeIndex / (TRAVEL_TIME_PRESETS_MIN.length - 1)) * 100}%, #e2e8f0 100%)` }}
               />
               <div className="flex justify-between text-xs text-slate-500 mt-1">
-                <span>0 (tous)</span>
-                <span>2 h</span>
+                <span>15 min</span>
+                <span>3 h</span>
               </div>
+              <p className="text-xs text-slate-400 mt-0.5">Estimation à vol d'oiseau (≈ 70 km/h). Les isochrones réelles (temps de conduite) nécessiteraient une API dédiée.</p>
               <label className="block text-sm font-medium text-slate-700 mt-4 mb-2">Température min. : {minTemp > 0 ? `${minTemp} °C` : 'Aucune'}</label>
               <input
                 type="range"
