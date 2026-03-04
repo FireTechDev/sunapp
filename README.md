@@ -1,24 +1,25 @@
 # SunApp
 
-Application **100 % client-side** pour trouver les villes ensoleillées autour de vous. Aucun backend ni Node.js requis.
+Application **100 % client-side** pour trouver des zones ensoleillées autour de vous. Aucun backend ni Node.js requis.
 
 ## Test local
 
-**Sans localhost** : gardez `index.html` et **`places.js`** dans le **même dossier**, puis ouvrez `index.html` dans le navigateur (double-clic). Les lieux sont chargés via `<script src="places.js">` (aucun fetch, donc pas de CORS en `file://`). La météo est récupérée depuis Open-Meteo.
+Ouvrez simplement `index.html` dans le navigateur (double-clic) ou servez le dossier via un serveur statique.
 
 ## Fichiers
 
 - `index.html` : application (logique + style + UI)
-- `places.js` : définit `window.SUNAPP_PLACES` (liste des lieux). À conserver dans le même dossier qu’`index.html`. Généré à partir de `places.json` si besoin.
+- `places.js` / `places.json` : données historiques conservées dans le repo (non nécessaires au runtime actuel).
 
 ## Stack
 
-HTML, React + Babel (CDN), Tailwind CSS (CDN), Leaflet. Données : `places.js` (local) + API Open-Meteo (météo).
+HTML, React + Babel (CDN), Tailwind CSS (CDN), Leaflet. Données runtime : API Open-Meteo (météo) + API Adresse (reverse géocodage).
 
 ## Fonctionnement
 
 - Géolocalisation au chargement
-- Lieux : chargés via `places.js` (script tag, pas de fetch), filtrés par distance (Haversine) dans le rayon choisi (50–300 km)
-- Météo : appel direct à Open-Meteo pour les coordonnées des lieux trouvés
-- Filtrage « soleil » (codes 0, 1, 2) et tri par distance
+- Points candidats : génération d'une grille dans le rayon choisi (15 min à 3 h), puis sélection des meilleurs points météo
+- Météo : appel direct à Open-Meteo pour les coordonnées des points
+- Nommage : reverse géocodage via API Adresse
+- Filtrage « soleil » (codes 0, 1, 2) et tri par score/distance
 - Carte Leaflet avec marqueurs

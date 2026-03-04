@@ -122,7 +122,6 @@
   </style>
 </head>
 <body class="min-h-screen bg-sky-50 text-slate-800">
-  <script src="places.js"></script>
   <div id="root"></div>
 
   <script type="text/babel" data-type="module">
@@ -223,12 +222,6 @@
       if (!isSunny) score *= 0.5;
       return Math.max(0, Math.min(100, score));
     }
-    // Météo : appel direct (Open-Meteo autorise CORS). Pas de proxy.
-    async function fetchNoCors(url) {
-      return fetch(url);
-    }
-
-
     // Libellés météo WMO (Open-Meteo) en français
     const WEATHER_LABELS = {
       0: 'Ciel dégagé', 1: 'Plutôt dégagé', 2: 'Partiellement nuageux', 3: 'Couvert',
@@ -248,38 +241,38 @@
     }
 
     // ---------- Icônes (Lucide-style inline SVGs) ----------
-    const IconSun = () => (
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+    const IconSun = (props) => (
+      <svg {...props} xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
     );
-    const IconMapPin = () => (
-      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+    const IconMapPin = (props) => (
+      <svg {...props} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
     );
-    const IconWind = () => (
-      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2.5 2.5 0 1 1 11 8H2"/><path d="M12.6 19.4A2.5 2.5 0 1 0 14 15H2"/></svg>
+    const IconWind = (props) => (
+      <svg {...props} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2.5 2.5 0 1 1 11 8H2"/><path d="M12.6 19.4A2.5 2.5 0 1 0 14 15H2"/></svg>
     );
-    const IconThermometer = () => (
-      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></svg>
+    const IconThermometer = (props) => (
+      <svg {...props} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></svg>
     );
-    const IconAlertCircle = () => (
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    const IconAlertCircle = (props) => (
+      <svg {...props} xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
     );
-    const IconRefresh = () => (
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+    const IconRefresh = (props) => (
+      <svg {...props} xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
     );
-    const IconClock = () => (
-      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+    const IconClock = (props) => (
+      <svg {...props} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
     );
-    const IconDroplet = () => (
-      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/></svg>
+    const IconDroplet = (props) => (
+      <svg {...props} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/></svg>
     );
-    const IconCamera = () => (
-      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+    const IconCamera = (props) => (
+      <svg {...props} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
     );
-    const IconCloudSun = () => (
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v2M4.93 4.93l1.41 1.41M2 12h2M4.93 19.07l1.41-1.41M12 22v-2M19.07 19.07l-1.41-1.41M22 12h-2"/><path d="M12 6a4 4 0 0 0-4 4 4 4 0 0 0 4 4h6a4 4 0 0 0 0-8 4 4 0 0 0-4-4Z"/></svg>
+    const IconCloudSun = (props) => (
+      <svg {...props} xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v2M4.93 4.93l1.41 1.41M2 12h2M4.93 19.07l1.41-1.41M12 22v-2M19.07 19.07l-1.41-1.41M22 12h-2"/><path d="M12 6a4 4 0 0 0-4 4 4 4 0 0 0 4 4h6a4 4 0 0 0 0-8 4 4 0 0 0-4-4Z"/></svg>
     );
-    const IconExternalLink = () => (
-      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+    const IconExternalLink = (props) => (
+      <svg {...props} xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
     );
 
     // ---------- RadarScanner (animation chargement) ----------
@@ -507,7 +500,6 @@
       const [travelTimeIndex, setTravelTimeIndex] = useState(3);
       const [cities, setCities] = useState([]);
       const [isFallbackMode, setIsFallbackMode] = useState(false);
-      const [isOutsideRadius, setIsOutsideRadius] = useState(false);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState(null);
       const [selectedCity, setSelectedCity] = useState(null);
@@ -519,6 +511,8 @@
       const mapInstanceRef = useRef(null);
       const markersRef = useRef([]);
       const circleRef = useRef(null);
+      const searchSeqRef = useRef(0);
+      const searchAbortRef = useRef(null);
 
       const travelTimeMin = TRAVEL_TIME_PRESETS_MIN[Math.min(travelTimeIndex, TRAVEL_TIME_PRESETS_MIN.length - 1)];
       const radiusKm = travelTimeToRadiusKm(travelTimeMin);
@@ -596,7 +590,7 @@
         return sampled;
       }
 
-      async function reverseGeocodeFrBatch(points) {
+      async function reverseGeocodeFrBatch(points, signal) {
         const directionLabel = (fromLat, fromLon, toLat, toLon) => {
           const dLon = ((toLon - fromLon) * Math.PI) / 180;
           const y = Math.sin(dLon) * Math.cos((toLat * Math.PI) / 180);
@@ -615,7 +609,7 @@
         const lookupOne = async (p, idx) => {
           const url = `https://api-adresse.data.gouv.fr/reverse/?lon=${p.lon}&lat=${p.lat}`;
           try {
-            const res = await fetch(url);
+            const res = await fetch(url, { signal });
             if (!res.ok) return null;
             const data = await res.json();
             const feat = data?.features?.[0];
@@ -648,9 +642,9 @@
           },
           (err) => {
             const messages = {
-              PERMISSION_DENIED: 'Accès à la position refusé. Autorisez la géolocalisation pour utiliser SunApp.',
-              POSITION_UNAVAILABLE: 'Position indisponible. Vérifiez votre connexion ou le GPS.',
-              TIMEOUT: 'Délai de géolocalisation dépassé. Réessayez.',
+              1: 'Accès à la position refusé. Autorisez la géolocalisation pour utiliser SunApp.',
+              2: 'Position indisponible. Vérifiez votre connexion ou le GPS.',
+              3: 'Délai de géolocalisation dépassé. Réessayez.',
             };
             setError(messages[err.code] || 'Erreur de géolocalisation.');
             setLoading(false);
@@ -662,16 +656,28 @@
       // Recherche météo par maillage (grille dans le rayon) + Open-Meteo batch + API Géo
       async function runSearch() {
         if (!position) return;
+        const searchSeq = searchSeqRef.current + 1;
+        searchSeqRef.current = searchSeq;
+        if (searchAbortRef.current) searchAbortRef.current.abort();
+        const abortController = new AbortController();
+        searchAbortRef.current = abortController;
+        const { signal } = abortController;
+        const isCurrentSearch = () => searchSeqRef.current === searchSeq;
+        const finishIfCurrent = () => {
+          if (!isCurrentSearch()) return;
+          searchAbortRef.current = null;
+          setLoading(false);
+        };
+
         setLoading(true);
         setError(null);
         setCities([]);
         setIsFallbackMode(false);
-        setIsOutsideRadius(false);
 
         const grid = generateSearchGrid(position.lat, position.lon, radiusKm, 15, 320);
         if (grid.length === 0) {
           setError('Aucun point de recherche disponible. Élargissez le rayon.');
-          setLoading(false);
+          finishIfCurrent();
           return;
         }
 
@@ -750,11 +756,9 @@
             const latStr = pts.map((p) => p.lat).join(',');
             const lonStr = pts.map((p) => p.lon).join(',');
             const url = `${baseUrl}?latitude=${latStr}&longitude=${lonStr}&${params}`;
-            const meteoRes = await fetch(url);
-            return meteoRes.ok
-              ? meteoRes.json()
-              : fetch('https://corsproxy.io/?' + encodeURIComponent(url))
-                .then((r) => r.ok ? r.json() : Promise.reject(new Error('Météo indisponible')));
+            const meteoRes = await fetch(url, { signal });
+            if (!meteoRes.ok) throw new Error('Service météo indisponible. Réessayez.');
+            return meteoRes.json();
           };
 
           // Tentative en une requête ; fallback chunké si la réponse est partielle/incomplète
@@ -807,23 +811,31 @@
             return picked;
           };
           const top20 = pickTopWithDistanceSpread(scored, 20);
-          const namedTop20 = await reverseGeocodeFrBatch(top20);
+          const namedTop20 = await reverseGeocodeFrBatch(top20, signal);
           const finalList = namedTop20
             .map((p, i) => ({ ...p, id: p.id || `zone-${i}` }))
             .sort(byScoreThenDist);
+          if (!isCurrentSearch()) return;
           setIsFallbackMode(finalList.filter((c) => SUN_CODES.includes(c.weather_code)).length === 0 && finalList.length > 0);
           setCities(finalList);
-          setLoading(false);
+          finishIfCurrent();
         } catch (err) {
+          if (err?.name === 'AbortError' || !isCurrentSearch()) return;
           setError(err.message || 'Recherche météo indisponible. Réessayez.');
           setCities([]);
-          setLoading(false);
+          finishIfCurrent();
         }
       }
 
       useEffect(() => {
         if (position) runSearch();
       }, [position?.lat, position?.lon, radiusKm]);
+
+      useEffect(() => {
+        return () => {
+          if (searchAbortRef.current) searchAbortRef.current.abort();
+        };
+      }, []);
 
       // Carte Leaflet + cercle du rayon de recherche
       useEffect(() => {
@@ -1005,12 +1017,11 @@
           <div className="bg-white rounded-2xl shadow-lg border border-slate-100 overflow-hidden">
             <div className="bg-[#36A7EB] text-white px-6 py-4 rounded-t-2xl">
               <h2 className="text-lg font-bold">
-                {isFallbackMode ? 'Zones météo (aucun point ensoleillé)' : isOutsideRadius ? `Zones les plus proches (au-delà de ${radiusKm} km)` : `Zones météo près de ${locationTitle}`}
+                {isFallbackMode ? 'Zones météo (aucun point ensoleillé)' : `Zones météo près de ${locationTitle}`}
               </h2>
               <p className="text-sm text-white/90 mt-0.5">
                 {loading && position ? 'Recherche en cours…' : cities.length === 0 && !error ? 'Aucun lieu' : (displayedCities.length !== cities.length ? `${destinationLabel} — ${displayedCities.length} affichés` : destinationLabel)}
                 {isFallbackMode && cities.length > 0 && ' — triés du moins nuageux au plus proche'}
-                {isOutsideRadius && !isFallbackMode && cities.length > 0 && ' — aucun lieu dans le rayon, affichage des plus proches'}
               </p>
             </div>
             <div className="p-4 md:p-6">
