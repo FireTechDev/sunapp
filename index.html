@@ -187,7 +187,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 21h45';
+    const APP_BUILD = '04/03/2026 - 21h48';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -2111,6 +2111,18 @@ out tags center 120;`;
           window.history.replaceState(null, '', `#${cardId}`);
         } catch (_) {}
       }, []);
+      const fitMapToRadius = useCallback((animate = true) => {
+        const map = mapInstanceRef.current;
+        const circle = circleRef.current;
+        if (!map || !circle) return;
+        const bounds = circle.getBounds();
+        if (!bounds || !bounds.isValid()) return;
+        map.fitBounds(bounds, {
+          padding: [28, 28],
+          maxZoom: 12,
+          animate,
+        });
+      }, []);
 
       function generateSearchGrid(lat, lon, radiusKm, baseStepKm = 15, maxPoints = 320) {
         const safeRadiusKm = Math.max(8, Number(radiusKm) || 0);
@@ -2771,6 +2783,7 @@ out tags center 120;`;
         }).addTo(map);
         circleRef.current = circle;
         mapInstanceRef.current = map;
+        fitMapToRadius(false);
         return () => {
           if (mapInstanceRef.current) {
             mapInstanceRef.current.remove();
@@ -2778,13 +2791,14 @@ out tags center 120;`;
           }
           circleRef.current = null;
         };
-      }, [position, positionSource]);
+      }, [position, positionSource, fitMapToRadius]);
 
       useEffect(() => {
         if (circleRef.current && mapInstanceRef.current) {
           circleRef.current.setRadius(radiusKm * 1000);
+          fitMapToRadius(true);
         }
-      }, [radiusKm]);
+      }, [radiusKm, fitMapToRadius]);
 
       useEffect(() => {
         if (!mapInstanceRef.current) return;
