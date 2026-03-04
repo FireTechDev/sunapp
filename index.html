@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SunApp — Trouvez le soleil</title>
-  <!-- Tailwind via CDN : choix volontaire pour fichier unique sans build (voir https://tailwindcss.com/docs/installation pour la prod) -->
-  <!-- Tailwind CSS -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>☀️</text></svg>" />
+  <!-- Tailwind via CDN (avertissement prod : préférer build PostCSS/CLI) -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -456,24 +456,35 @@
         const queryFull = `[out:json][timeout:25];(node["place"~"^city$|^town$|^village$|^suburb$"](around:${r},${lat},${lon});node["leisure"="park"](around:${r},${lat},${lon});node["natural"="beach"](around:${r},${lat},${lon});node["tourism"~"^resort$|^beach_resort$|^theme_park$"](around:${r},${lat},${lon}););out body;`;
         const queryShort = `[out:json][timeout:20];node["place"~"city|town|village|suburb"](around:${r},${lat},${lon});out body;`;
         const endpoints = [
-          'https://overpass-api.de/api/interpreter',
           'https://overpass.kumi.systems/api/interpreter',
+          'https://overpass-api.de/api/interpreter',
         ];
         let data = null;
+        let lastStatus = 0;
         for (const url of endpoints) {
           try {
             let res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(queryFull), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+            lastStatus = res.status;
+            if (res.status === 429) throw new Error('Trop de requêtes vers le serveur de lieux. Réessayez dans 1 à 2 minutes.');
+            if (res.status === 504 || res.status === 502) continue;
             if (!res.ok) {
               const getUrl = url + '?data=' + encodeURIComponent(queryShort);
-              res = await fetch('https://corsproxy.io/?' + encodeURIComponent(getUrl));
+              res = await fetch(getUrl);
+              lastStatus = res.status;
+              if (res.status === 429) throw new Error('Trop de requêtes. Réessayez dans une minute.');
             }
             if (res.ok) {
               data = await res.json();
               if (data && data.elements && data.elements.length > 0) break;
             }
-          } catch (_) {}
+          } catch (e) {
+            if (e.message && e.message.includes('Trop de requêtes')) throw e;
+          }
         }
-        if (!data || !data.elements || data.elements.length === 0) throw new Error('Lieux indisponibles. Vérifiez votre connexion ou réessayez dans un instant.');
+        if (!data || !data.elements || data.elements.length === 0) {
+          if (lastStatus === 429) throw new Error('Trop de requêtes. Réessayez dans une minute.');
+          throw new Error('Lieux indisponibles. Réessayez dans un instant ou vérifiez votre connexion.');
+        }
         const seen = new Set();
         return data.elements.map((el) => {
           const lat = el.lat ?? el.center?.lat;
