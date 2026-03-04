@@ -176,7 +176,7 @@
       else if (sunny && felt >= 15) raw = 3;
       else if (sunny || code === 2) raw = felt >= 12 ? 3 : 2;
       else raw = felt >= 10 ? 2 : 1;
-      if (raw === 5 && wind >= 30) raw = 4;
+      if (wind >= 30 && raw > 2) raw = 2;
       const config = WEATHER_SCORE_CONFIG[Math.min(raw, 5)];
       return { ...config, score: raw };
     }
