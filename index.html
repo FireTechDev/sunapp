@@ -127,7 +127,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 17h13';
+    const APP_BUILD = '04/03/2026 - 17h16';
 
     // ---------- Utilitaires ----------
     function haversine(lat1, lon1, lat2, lon2) {
@@ -263,16 +263,35 @@
     }
 
     const MAX_GEO_IMAGE_DISTANCE_M = 10000;
-    const MAX_REGION_PHOTOS = 8;
+    const MAX_CARD_PHOTOS = 3;
     const CARD_PHOTO_CACHE = new Map();
-    const NON_SCENIC_IMAGE_HINTS = /\b(map|carte|plan|logo|flag|drapeau|blason|coat[_ -]?of[_ -]?arms|symbol|diagram|locator|location map|svg)\b/i;
+    const NON_SCENIC_TITLE_HINTS = /\b(map|carte|plan|logo|flag|drapeau|blason|coat[_ -]?of[_ -]?arms|symbol|diagram|locator|location map|svg|liste de|chronologie|histoire de)\b/i;
+    const PERSON_DESCRIPTION_HINTS = /\b(acteur|actrice|chanteur|chanteuse|joueur|joueuse|footballeur|rugbyman|cycliste|peintre|écrivain|politique|député|maire|avocat|journaliste|personnalité|biographie|né en|née en|mort en|morte en|human)\b/i;
+    const PLACE_DESCRIPTION_HINTS = /\b(commune|village|hameau|quartier|eglise|chateau|mont|lac|riviere|foret|parc|plage|vallee|reserve|gorges|site naturel|monument|abbaye|cathedrale|basilique|musee|pont|canal|place)\b/i;
+    const PLACE_TOKEN_STOPWORDS = new Set(['de', 'du', 'des', 'la', 'le', 'les', 'sur', 'sous', 'saint', 'sainte', 'l', 'd']);
 
     function getCardPhotoCacheKey(lat, lon) {
       return `${Number(lat).toFixed(4)},${Number(lon).toFixed(4)}`;
     }
 
-    function sanitizeCommonsTitle(title) {
-      return (title || '').replace(/^File:/i, '').replace(/_/g, ' ');
+    function normalizeText(input) {
+      return (input || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+    }
+
+    function extractPlaceTokens(placeName) {
+      const normalized = normalizeText(placeName);
+      return normalized
+        .split(/[^a-z0-9]+/)
+        .filter((token) => token.length >= 4 && !PLACE_TOKEN_STOPWORDS.has(token));
+    }
+
+    function hasPlaceTokenMatch(text, placeTokens) {
+      if (!placeTokens || placeTokens.length === 0) return false;
+      const normalized = normalizeText(text);
+      return placeTokens.some((token) => normalized.includes(token));
     }
 
     async function fetchJson(url, signal) {
@@ -281,78 +300,78 @@
       return res.json();
     }
 
-    async function fetchZonePhotoSlides(lat, lon, signal) {
-      let primarySlide = null;
-      try {
-        const nearbyWiki = await fetchJson(
-          `https://fr.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=${MAX_GEO_IMAGE_DISTANCE_M}&gslimit=8&format=json&origin=*`,
-          signal
-        );
-        const nearestWiki = (nearbyWiki?.query?.geosearch || []).find((item) => item?.pageid && (item?.dist ?? Infinity) <= MAX_GEO_IMAGE_DISTANCE_M);
-        if (nearestWiki?.pageid) {
-          const wikiImageData = await fetchJson(
-            `https://fr.wikipedia.org/w/api.php?action=query&prop=pageimages&pithumbsize=900&pageids=${nearestWiki.pageid}&format=json&origin=*`,
-            signal
-          );
-          const wikiPage = wikiImageData?.query?.pages && Object.values(wikiImageData.query.pages)[0];
-          const wikiThumb = wikiPage?.thumbnail?.source;
-          if (wikiThumb) {
-            primarySlide = {
-              url: wikiThumb,
-              label: wikiPage?.title || 'Lieu proche',
-              distanceM: Math.round(nearestWiki.dist || 0),
-              source: 'wikipedia',
-            };
-          }
-        }
-      } catch (_) {}
+    async function fetchZonePhotoSlides(lat, lon, placeName, signal) {
+      const nearbyWiki = await fetchJson(
+        `https://fr.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=${MAX_GEO_IMAGE_DISTANCE_M}&gslimit=30&gsnamespace=0&format=json&origin=*`,
+        signal
+      );
+      const candidates = (nearbyWiki?.query?.geosearch || [])
+        .filter((item) => item?.pageid && (item?.dist ?? Infinity) <= MAX_GEO_IMAGE_DISTANCE_M)
+        .sort((a, b) => (a.dist ?? 0) - (b.dist ?? 0));
+      if (candidates.length === 0) return [];
 
-      let regionSlides = [];
-      try {
-        const commonsGeo = await fetchJson(
-          `https://commons.wikimedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=${MAX_GEO_IMAGE_DISTANCE_M}&gslimit=30&gsnamespace=6&format=json&origin=*`,
-          signal
-        );
-        const commonsCandidates = (commonsGeo?.query?.geosearch || [])
-          .filter((item) => item?.pageid && (item?.dist ?? Infinity) <= MAX_GEO_IMAGE_DISTANCE_M)
-          .sort((a, b) => (a.dist ?? 0) - (b.dist ?? 0));
-        if (commonsCandidates.length > 0) {
-          const pageIds = commonsCandidates.map((item) => item.pageid).join('|');
-          const commonsInfo = await fetchJson(
-            `https://commons.wikimedia.org/w/api.php?action=query&prop=imageinfo&pageids=${pageIds}&iiprop=url|mime&iiurlwidth=1200&format=json&origin=*`,
-            signal
-          );
-          const byPageId = new Map(commonsCandidates.map((item) => [String(item.pageid), item]));
-          const seenUrls = new Set(primarySlide ? [primarySlide.url] : []);
-          regionSlides = Object.values(commonsInfo?.query?.pages || {})
-            .map((page) => {
-              const candidate = byPageId.get(String(page?.pageid));
-              const info = page?.imageinfo?.[0];
-              const imgUrl = info?.thumburl || info?.url || null;
-              const mime = info?.mime || '';
-              const title = sanitizeCommonsTitle(page?.title || candidate?.title || '');
-              if (!candidate || !imgUrl || !mime.startsWith('image/')) return null;
-              if (/svg|gif/i.test(mime)) return null;
-              if (NON_SCENIC_IMAGE_HINTS.test(title)) return null;
-              if (seenUrls.has(imgUrl)) return null;
-              seenUrls.add(imgUrl);
-              return {
-                url: imgUrl,
-                label: title,
-                distanceM: Math.round(candidate.dist || 0),
-                source: 'commons',
-              };
-            })
-            .filter(Boolean)
-            .sort((a, b) => (a.distanceM ?? 0) - (b.distanceM ?? 0))
-            .slice(0, MAX_REGION_PHOTOS);
-        }
-      } catch (_) {}
+      const pageIds = candidates.map((item) => item.pageid).join('|');
+      const pagesData = await fetchJson(
+        `https://fr.wikipedia.org/w/api.php?action=query&prop=pageimages|pageterms&pageids=${pageIds}&pithumbsize=900&wbptterms=description&format=json&origin=*`,
+        signal
+      );
+      const byPageId = new Map(candidates.map((item) => [String(item.pageid), item]));
+      const placeTokens = extractPlaceTokens(placeName || '');
+      const seenUrls = new Set();
 
-      const slides = [];
-      if (primarySlide && (primarySlide.distanceM ?? Infinity) <= MAX_GEO_IMAGE_DISTANCE_M) slides.push(primarySlide);
-      slides.push(...regionSlides.filter((slide) => (slide.distanceM ?? Infinity) <= MAX_GEO_IMAGE_DISTANCE_M));
-      return slides.slice(0, MAX_REGION_PHOTOS + 1);
+      const rawSlides = Object.values(pagesData?.query?.pages || {})
+        .map((page) => {
+          const candidate = byPageId.get(String(page?.pageid));
+          const imgUrl = page?.thumbnail?.source || null;
+          const title = page?.title || candidate?.title || '';
+          const description = page?.terms?.description?.[0] || '';
+          if (!candidate || !imgUrl || !title) return null;
+          if (seenUrls.has(imgUrl)) return null;
+          if (NON_SCENIC_TITLE_HINTS.test(title)) return null;
+          if (PERSON_DESCRIPTION_HINTS.test(description)) return null;
+          const placeMatch = hasPlaceTokenMatch(title, placeTokens) || hasPlaceTokenMatch(description, placeTokens);
+          const placeLike = PLACE_DESCRIPTION_HINTS.test(normalizeText(description));
+          const veryClose = (candidate.dist ?? Infinity) <= 2500;
+          if (!placeMatch && !placeLike && !veryClose) return null;
+          seenUrls.add(imgUrl);
+          const relevance =
+            (placeMatch ? 35 : 0) +
+            (placeLike ? 15 : 0) +
+            (veryClose ? 10 : 0) -
+            Math.min(20, Math.round((candidate.dist ?? 0) / 750));
+          return {
+            url: imgUrl,
+            label: title,
+            distanceM: Math.round(candidate.dist || 0),
+            source: 'nearby-wiki',
+            relevance,
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => (b.relevance ?? 0) - (a.relevance ?? 0) || (a.distanceM ?? 0) - (b.distanceM ?? 0));
+
+      const topSlides = rawSlides.slice(0, MAX_CARD_PHOTOS);
+      if (topSlides.length > 0) return topSlides;
+
+      // Dernier fallback: photos les plus proches avec mini filtre anti hors contexte
+      const fallbackSlides = Object.values(pagesData?.query?.pages || {})
+        .map((page) => {
+          const candidate = byPageId.get(String(page?.pageid));
+          const imgUrl = page?.thumbnail?.source || null;
+          const title = page?.title || candidate?.title || '';
+          const description = page?.terms?.description?.[0] || '';
+          if (!candidate || !imgUrl || !title) return null;
+          if (NON_SCENIC_TITLE_HINTS.test(title) || PERSON_DESCRIPTION_HINTS.test(description)) return null;
+          return {
+            url: imgUrl,
+            label: title,
+            distanceM: Math.round(candidate.dist || 0),
+            source: 'nearby-wiki',
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => (a.distanceM ?? 0) - (b.distanceM ?? 0));
+      return fallbackSlides.slice(0, MAX_CARD_PHOTOS);
     }
 
     // ---------- Icônes (Lucide-style inline SVGs) ----------
@@ -481,7 +500,7 @@
         }
         (async () => {
           try {
-            const slides = await fetchZonePhotoSlides(city.lat, city.lon, abortController.signal);
+            const slides = await fetchZonePhotoSlides(city.lat, city.lon, city.name, abortController.signal);
             if (cancelled) return;
             CARD_PHOTO_CACHE.set(cacheKey, slides);
             setPhotoSlides(slides);
@@ -515,7 +534,6 @@
       const hasGenericName = /^Zone\s+\d+$/i.test(city.name || '');
       const cardTitle = hasGenericName ? 'Spot ensoleille' : city.name;
       const activeSlide = photoSlides[photoIndex] || null;
-      const hasNearbyRegionPhotos = photoSlides.some((slide) => slide.source === 'commons');
       const showCarouselControls = photoSlides.length > 1;
 
       const previousPhoto = (e) => {
@@ -613,13 +631,8 @@
                     title={activeSlide.label || ''}
                   >
                     {(activeSlide.distanceM != null ? `${(activeSlide.distanceM / 1000).toFixed(1)} km` : 'Zone locale')}
-                    {activeSlide.source === 'commons' ? ' • Environnement' : ' • Spot'}
+                    {' • Spot local'}
                   </div>
-                  {hasNearbyRegionPhotos && (
-                    <div className="absolute top-2 right-2 z-10 px-2 py-1 rounded-md bg-emerald-500/90 text-white text-[11px]">
-                      Paysages proches
-                    </div>
-                  )}
                 </>
               ) : null}
               {!activeSlide && (
