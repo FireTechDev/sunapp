@@ -149,7 +149,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 18h05';
+    const APP_BUILD = '04/03/2026 - 18h07';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -811,7 +811,6 @@
                 <span className={windAlert ? 'font-bold text-orange-600' : 'text-slate-700'}>
                   {city.wind_speed != null ? `${Number(city.wind_speed).toFixed(1)} km/h` : '—'}
                 </span>
-                {windAlert && <span className="text-orange-600" title="Vent fort">🌬️</span>}
               </div>
             </div>
 
