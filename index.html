@@ -175,7 +175,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 18h17';
+    const APP_BUILD = '04/03/2026 - 18h21';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -289,15 +289,6 @@
     }
 
     const SUN_CODES = [0, 1, 2]; // 0=clear, 1=mainly clear, 2=partly cloudy
-    // Niveaux météo pour le slider : 0=tout, 1=pas neige/orage, 2=pas précipitations, 3=nuages ok, 4=soleil
-    const WEATHER_LEVEL_CODES = {
-      0: null,
-      1: [0,1,2,3,45,48,51,53,55,56,57,61,63,65,66,67,80,81,82],
-      2: [0,1,2,3,45,48],
-      3: [0,1,2,3],
-      4: [0,1,2],
-    };
-    const WEATHER_LEVEL_LABELS = ['Tout temps', 'Pas de neige ni orage', 'Pas de pluie', 'Nuages OK', 'Soleil uniquement'];
 
     // Vent : score 0–100 (même formule que WeatherScore) pour affichage des alertes dans les cartes
     function getWindScoreValue(windKmh) {
@@ -886,8 +877,8 @@
       const [requestingGeo, setRequestingGeo] = useState(false);
       const [selectedCity, setSelectedCity] = useState(null);
       const [sortBy, setSortBy] = useState('sunscore');
-      const [minTemp, setMinTemp] = useState(10);
-      const [maxWindKmh, setMaxWindKmh] = useState(0);
+      const [minTemp, setMinTemp] = useState(15);
+      const [maxWindKmh, setMaxWindKmh] = useState(20);
       const [minWeatherLevel, setMinWeatherLevel] = useState(0);
       const [pwaUpdateInfo, setPwaUpdateInfo] = useState(null);
       const [pwaOfflineReady, setPwaOfflineReady] = useState(false);
@@ -926,10 +917,7 @@
           return t != null && t >= minTemp;
         });
         if (maxWindKmh > 0) list = list.filter((c) => c.wind_speed != null && c.wind_speed <= maxWindKmh);
-        if (minWeatherLevel > 0) {
-          const allowed = WEATHER_LEVEL_CODES[minWeatherLevel];
-          if (allowed) list = list.filter((c) => allowed.includes(c.weather_code ?? -1));
-        }
+        if (minWeatherLevel > 0) list = list.filter((c) => getWeatherScore(c).score >= minWeatherLevel);
         if (sortBy === 'distance' && position) list.sort((a, b) => haversine(position.lat, position.lon, a.lat, a.lon) - haversine(position.lat, position.lon, b.lat, b.lon));
         else if (sortBy === 'hottest') {
           const felt = (c) => c.feelsLike != null ? c.feelsLike : c.temp ?? -999;
@@ -1492,6 +1480,10 @@
         mapInstanceRef.current.setView([selectedCity.lat, selectedCity.lon], 10);
       }, [selectedCity]);
 
+      const weatherLevelLabel = minWeatherLevel > 0
+        ? `${WEATHER_SCORE_CONFIG[minWeatherLevel]?.label || '—'} ou mieux`
+        : 'Tout temps';
+
       const locationTitle = positionSource === 'geo'
         ? 'chez vous'
         : positionSource === 'saved'
@@ -1613,7 +1605,7 @@
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
             <div className="bg-white rounded-2xl shadow-md border border-slate-100 p-4 lg:col-span-2">
-              <label className="block text-sm font-medium text-slate-700 mb-2">Température min. : {minTemp} °C</label>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Temperature ressentie min. : {minTemp} °C</label>
               <input
                 type="range"
                 min="10"
@@ -1628,7 +1620,7 @@
                 <span>10 °C</span>
                 <span>25 °C</span>
               </div>
-              <label className="block text-sm font-medium text-slate-700 mt-4 mb-2">Vent max : {maxWindKmh > 0 ? `${maxWindKmh} km/h` : 'Aucune limite'}</label>
+              <label className="block text-sm font-medium text-slate-700 mt-4 mb-2">Vent max : {maxWindKmh} km/h</label>
               <input
                 type="range"
                 min="0"
@@ -1643,20 +1635,20 @@
                 <span>0 (tous)</span>
                 <span>60 km/h</span>
               </div>
-              <label className="block text-sm font-medium text-slate-700 mt-4 mb-2">Météo : {WEATHER_LEVEL_LABELS[minWeatherLevel]}</label>
+              <label className="block text-sm font-medium text-slate-700 mt-4 mb-2">Météo : {weatherLevelLabel}</label>
               <input
                 type="range"
                 min="0"
-                max="4"
+                max="5"
                 step="1"
                 value={minWeatherLevel}
                 onChange={(e) => setMinWeatherLevel(Number(e.target.value))}
                 className="w-full h-2 bg-slate-200 rounded-full appearance-none cursor-pointer"
-                style={{ background: `linear-gradient(to right, #36A7EB 0%, #36A7EB ${(minWeatherLevel / 4) * 100}%, #e2e8f0 ${(minWeatherLevel / 4) * 100}%, #e2e8f0 100%)` }}
+                style={{ background: `linear-gradient(to right, #36A7EB 0%, #36A7EB ${(minWeatherLevel / 5) * 100}%, #e2e8f0 ${(minWeatherLevel / 5) * 100}%, #e2e8f0 100%)` }}
               />
               <div className="flex justify-between text-xs text-slate-500 mt-1">
                 <span>Tout temps</span>
-                <span>Soleil uniquement</span>
+                <span>Parfait</span>
               </div>
               <button
                 type="button"
