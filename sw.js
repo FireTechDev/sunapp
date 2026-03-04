@@ -23,12 +23,26 @@ const API_HOSTS = new Set([
   'fr.wikipedia.org',
 ]);
 
+function isSupportedProtocol(url) {
+  return url.protocol === 'http:' || url.protocol === 'https:';
+}
+
 function isCacheableResponse(response) {
   return !!response && (response.status === 200 || response.type === 'opaque');
 }
 
 function shouldBypassCaching(url) {
   return /\.tile\.openstreetmap\.org$/i.test(url.hostname);
+}
+
+async function safeCachePut(cache, request, response) {
+  try {
+    const reqUrl = new URL(request.url);
+    if (!isSupportedProtocol(reqUrl)) return;
+    await cache.put(request, response);
+  } catch (_) {
+    // Ignore cache write failures (e.g., extension scheme requests, quota limits)
+  }
 }
 
 async function fetchWithTimeout(request, timeoutMs) {
@@ -45,9 +59,9 @@ async function staleWhileRevalidate(request, cacheName) {
   const cache = await caches.open(cacheName);
   const cached = await cache.match(request);
   const networkPromise = fetch(request)
-    .then((response) => {
+    .then(async (response) => {
       if (isCacheableResponse(response)) {
-        cache.put(request, response.clone());
+        await safeCachePut(cache, request, response.clone());
       }
       return response;
     })
@@ -63,7 +77,7 @@ async function networkFirst(request, cacheName, timeoutMs = 9000) {
   try {
     const response = await fetchWithTimeout(request, timeoutMs);
     if (isCacheableResponse(response)) {
-      cache.put(request, response.clone());
+      await safeCachePut(cache, request, response.clone());
     }
     return response;
   } catch (_) {
@@ -108,6 +122,7 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
+  if (!isSupportedProtocol(url)) return;
   if (shouldBypassCaching(url)) return;
 
   if (request.mode === 'navigate') {
@@ -117,7 +132,7 @@ self.addEventListener('fetch', (event) => {
           const response = await fetchWithTimeout(request, 9000);
           if (isCacheableResponse(response)) {
             const runtimeCache = await caches.open(RUNTIME_CACHE);
-            runtimeCache.put(request, response.clone());
+            await safeCachePut(runtimeCache, request, response.clone());
           }
           return response;
         } catch (_) {
