@@ -175,7 +175,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 20h13';
+    const APP_BUILD = '04/03/2026 - 20h21';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -425,6 +425,7 @@
     const MAX_GEO_IMAGE_DISTANCE_M = 10000;
     const MAX_CARD_PHOTOS = 3;
     const MAX_CARD_POIS = 3;
+    const MAX_CARD_RESTAURANTS = 3;
     const POI_SEARCH_RADIUS_M = 15000;
     const POI_WIKI_RADIUS_M = 4000;
     const CARD_PHOTO_CACHE = new Map();
@@ -467,6 +468,95 @@
       return text.length > maxLen ? `${text.slice(0, maxLen - 1)}…` : text;
     }
 
+    function pickFirstTagValue(tags, keys = []) {
+      for (const key of keys) {
+        const raw = String(tags?.[key] ?? '').trim();
+        if (raw) return raw;
+      }
+      return '';
+    }
+
+    function parseRatingToFive(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return null;
+      const normalized = raw.replace(',', '.');
+      const fractionMatch = normalized.match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)/);
+      if (fractionMatch) {
+        const num = Number(fractionMatch[1]);
+        const den = Number(fractionMatch[2]);
+        if (Number.isFinite(num) && Number.isFinite(den) && den > 0) {
+          const scaled = (num / den) * 5;
+          if (Number.isFinite(scaled) && scaled >= 0 && scaled <= 5) return scaled;
+        }
+      }
+      const numberMatch = normalized.match(/-?\d+(?:\.\d+)?/);
+      if (!numberMatch) return null;
+      const valueNum = Number(numberMatch[0]);
+      if (!Number.isFinite(valueNum)) return null;
+      if (valueNum >= 0 && valueNum <= 5) return valueNum;
+      if (valueNum > 5 && valueNum <= 100) return valueNum / 20;
+      return null;
+    }
+
+    function parseReviewCount(value) {
+      const raw = String(value || '').trim().toLowerCase();
+      if (!raw) return null;
+      const kMatch = raw.match(/(\d+(?:[.,]\d+)?)\s*k/);
+      if (kMatch) {
+        const base = Number(kMatch[1].replace(',', '.'));
+        if (Number.isFinite(base) && base > 0) return Math.round(base * 1000);
+      }
+      const digitsOnly = raw.replace(/[^\d]/g, '');
+      if (!digitsOnly) return null;
+      const n = Number(digitsOnly);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    }
+
+    function getRestaurantReviewSnapshot(tags = {}) {
+      const ratingSources = [];
+      const pushSource = (label, ratingKeys, countKeys) => {
+        const rating = parseRatingToFive(pickFirstTagValue(tags, ratingKeys));
+        if (!Number.isFinite(rating)) return;
+        const count = parseReviewCount(pickFirstTagValue(tags, countKeys));
+        const weight = 1 + Math.min(4, Math.log10((count || 20) + 1));
+        ratingSources.push({ label, rating, count, weight });
+      };
+
+      pushSource(
+        'Google',
+        ['google:rating', 'google_rating', 'rating:google', 'google_stars'],
+        ['google:reviews', 'google_reviews', 'reviews:google', 'rating:google:count']
+      );
+      pushSource(
+        'TripAdvisor',
+        ['tripadvisor:rating', 'tripadvisor_rating', 'rating:tripadvisor'],
+        ['tripadvisor:reviews', 'tripadvisor_reviews', 'reviews:tripadvisor']
+      );
+      pushSource(
+        'Restaurant Guru',
+        ['restaurantguru:rating', 'restaurantguru_rating', 'rating:restaurantguru'],
+        ['restaurantguru:reviews', 'restaurantguru_reviews', 'reviews:restaurantguru']
+      );
+
+      if (ratingSources.length === 0) {
+        return { score100: null, sourceCount: 0, sourceBreakdown: [] };
+      }
+
+      const totalWeight = ratingSources.reduce((sum, source) => sum + source.weight, 0) || 1;
+      const weightedAverage = ratingSources.reduce((sum, source) => sum + source.rating * source.weight, 0) / totalWeight;
+      const clamped = Math.max(0, Math.min(5, weightedAverage));
+      const sourceBreakdown = ratingSources
+        .map((source) => `${source.label} ${source.rating.toFixed(1)}/5${source.count ? ` (${source.count})` : ''}`)
+        .slice(0, 3);
+      const sourceCount = ratingSources.length;
+
+      return {
+        score100: Math.round(clamped * 20),
+        sourceCount,
+        sourceBreakdown,
+      };
+    }
+
     function parseWikiTitleFromTag(wikiTag) {
       const raw = String(wikiTag || '').trim();
       if (!raw) return '';
@@ -496,6 +586,8 @@
     }
 
     function getPoiCategory(tags = {}) {
+      const amenity = String(tags.amenity || '');
+      if (amenity === 'restaurant') return { key: 'restaurant', label: 'Restaurant', emoji: '🍽️' };
       const tourism = String(tags.tourism || '');
       if (tourism === 'viewpoint') return { key: 'viewpoint', label: 'Point de vue', emoji: '🌄' };
       if (tourism === 'museum') return { key: 'museum', label: 'Musée', emoji: '🏛️' };
@@ -527,6 +619,7 @@
     function selectPoiIdeas(rawPois, city, maxItems = MAX_CARD_POIS) {
       if (!Array.isArray(rawPois) || rawPois.length === 0) return [];
       const ranked = rawPois
+        .filter((poi) => poi.categoryKey !== 'restaurant')
         .map((poi) => ({ ...poi, _score: scorePoiForCity(poi, city) }))
         .sort((a, b) => (b._score - a._score) || ((a.distanceM ?? Infinity) - (b.distanceM ?? Infinity)));
       const picked = [];
@@ -552,6 +645,30 @@
         }
       }
       return picked.slice(0, maxItems);
+    }
+
+    function selectRestaurantIdeas(rawPois, maxItems = MAX_CARD_RESTAURANTS) {
+      if (!Array.isArray(rawPois) || rawPois.length === 0) return [];
+      const ranked = rawPois
+        .filter((poi) => poi.categoryKey === 'restaurant')
+        .filter((restaurant) => restaurant.reviewScore100 != null)
+        .sort((a, b) => {
+          const scoreDiff = Number(b.reviewScore100) - Number(a.reviewScore100);
+          if (scoreDiff !== 0) return scoreDiff;
+          const sourceDiff = Number(b.reviewSourceCount || 0) - Number(a.reviewSourceCount || 0);
+          if (sourceDiff !== 0) return sourceDiff;
+          return (a.distanceM ?? Infinity) - (b.distanceM ?? Infinity);
+        });
+      const picked = [];
+      const usedNames = new Set();
+      for (const restaurant of ranked) {
+        const nameKey = normalizeText(restaurant.name || '');
+        if (!nameKey || usedNames.has(nameKey)) continue;
+        usedNames.add(nameKey);
+        picked.push(restaurant);
+        if (picked.length >= maxItems) break;
+      }
+      return picked;
     }
 
     function normalizeText(input) {
@@ -583,6 +700,7 @@
     async function fetchZonePoiIdeas(lat, lon, signal) {
       const query = `[out:json][timeout:18];
 (
+  nwr(around:${POI_SEARCH_RADIUS_M},${lat},${lon})["amenity"="restaurant"];
   nwr(around:${POI_SEARCH_RADIUS_M},${lat},${lon})["tourism"~"attraction|viewpoint|museum|theme_park|zoo|aquarium"];
   nwr(around:${POI_SEARCH_RADIUS_M},${lat},${lon})["leisure"~"park|garden|nature_reserve|picnic_site"];
   nwr(around:${POI_SEARCH_RADIUS_M},${lat},${lon})["historic"];
@@ -613,6 +731,7 @@ out tags center 120;`;
         const dedupeKey = `${normalizeText(name)}|${category.key}`;
         if (seen.has(dedupeKey)) continue;
         seen.add(dedupeKey);
+        const reviewSnapshot = category.key === 'restaurant' ? getRestaurantReviewSnapshot(tags) : null;
         pois.push({
           name,
           lat: Number(poiLat.toFixed(5)),
@@ -623,12 +742,23 @@ out tags center 120;`;
           categoryKey: category.key,
           categoryLabel: category.label,
           emoji: category.emoji,
+          reviewScore100: reviewSnapshot?.score100 ?? null,
+          reviewSourceCount: reviewSnapshot?.sourceCount ?? 0,
+          reviewSourceBreakdown: reviewSnapshot?.sourceBreakdown || [],
           tags: {
             website: String(tags.website || tags.url || tags['contact:website'] || '').trim(),
             opening_hours: String(tags.opening_hours || '').trim(),
             phone: String(tags.phone || tags['contact:phone'] || '').trim(),
             description: String(tags.description || tags.note || '').trim(),
             wikipedia: String(tags.wikipedia || '').trim(),
+            amenity: String(tags.amenity || '').trim(),
+            cuisine: String(tags.cuisine || '').trim(),
+            google_rating: pickFirstTagValue(tags, ['google:rating', 'google_rating', 'rating:google', 'google_stars']),
+            google_reviews: pickFirstTagValue(tags, ['google:reviews', 'google_reviews', 'reviews:google', 'rating:google:count']),
+            tripadvisor_rating: pickFirstTagValue(tags, ['tripadvisor:rating', 'tripadvisor_rating', 'rating:tripadvisor']),
+            tripadvisor_reviews: pickFirstTagValue(tags, ['tripadvisor:reviews', 'tripadvisor_reviews', 'reviews:tripadvisor']),
+            restaurantguru_rating: pickFirstTagValue(tags, ['restaurantguru:rating', 'restaurantguru_rating', 'rating:restaurantguru']),
+            restaurantguru_reviews: pickFirstTagValue(tags, ['restaurantguru:reviews', 'restaurantguru_reviews', 'reviews:restaurantguru']),
             tourism: String(tags.tourism || '').trim(),
             leisure: String(tags.leisure || '').trim(),
             historic: String(tags.historic || '').trim(),
@@ -719,10 +849,17 @@ out tags center 120;`;
         } catch (_) {}
       }
 
-      const typeHints = [tags.tourism, tags.leisure, tags.historic, tags.natural]
+      const typeHints = [tags.amenity, tags.cuisine, tags.tourism, tags.leisure, tags.historic, tags.natural]
         .map((v) => String(v || '').trim())
         .filter(Boolean)
         .join(' • ');
+      const computedReviewSnapshot = poi?.categoryKey === 'restaurant' ? getRestaurantReviewSnapshot(tags) : null;
+      const reviewScore100 = poi?.reviewScore100 != null
+        ? Number(poi.reviewScore100)
+        : (computedReviewSnapshot?.score100 ?? null);
+      const reviewSourceBreakdown = Array.isArray(poi?.reviewSourceBreakdown) && poi.reviewSourceBreakdown.length > 0
+        ? poi.reviewSourceBreakdown
+        : (computedReviewSnapshot?.sourceBreakdown || []);
 
       return {
         locality,
@@ -734,6 +871,8 @@ out tags center 120;`;
         openingHours: compactPoiText(tags.opening_hours || '', 120),
         phone: compactPoiText(tags.phone || '', 60),
         typeHint: compactPoiText(typeHints, 100),
+        reviewScore100,
+        reviewSourceBreakdown,
         osmUrl: getPoiOsmUrl(poi),
       };
     }
@@ -1076,6 +1215,10 @@ out tags center 120;`;
         () => selectPoiIdeas(poiRaw, city, MAX_CARD_POIS),
         [poiRaw, city.weather_code, city.wind_speed]
       );
+      const restaurantIdeas = useMemo(
+        () => selectRestaurantIdeas(poiRaw, MAX_CARD_RESTAURANTS),
+        [poiRaw]
+      );
 
       const previousPhoto = (e) => {
         e.stopPropagation();
@@ -1304,6 +1447,56 @@ out tags center 120;`;
               )}
             </div>
 
+            <div className="mt-4 pt-3 border-t border-slate-100">
+              <div className="flex items-center gap-2 text-orange-600 font-medium text-sm mb-2">
+                <span className="text-base leading-none">🍽️</span>
+                Manger à proximité
+              </div>
+              {poiLoading ? (
+                <p className="text-xs text-slate-500">Classement des restaurants...</p>
+              ) : restaurantIdeas.length > 0 ? (
+                <ol className="space-y-1.5 text-slate-600 text-sm">
+                  {restaurantIdeas.map((restaurant, idx) => (
+                    <li key={`${restaurant.name}-${idx}`} className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium text-slate-700" title={restaurant.name}>
+                          {idx + 1}. {restaurant.name}
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          {restaurant.reviewScore100 != null ? `Score avis ${Math.round(restaurant.reviewScore100)}/100` : 'Score avis indisponible'}
+                          {restaurant.reviewSourceCount > 0 ? ` • ${restaurant.reviewSourceCount} source${restaurant.reviewSourceCount > 1 ? 's' : ''}` : ''}
+                          {' • '}
+                          {(restaurant.distanceM / 1000).toFixed(1)} km
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          className="text-[11px] px-2 py-1 rounded-md bg-slate-100 text-slate-700 font-medium hover:bg-slate-200"
+                          onClick={(e) => openPoiPreview(e, restaurant)}
+                        >
+                          Voir
+                        </button>
+                        <a
+                          href={`https://www.waze.com/ul?ll=${restaurant.lat},${restaurant.lon}&navigate=yes`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[11px] px-2 py-1 rounded-md bg-sky-50 text-sky-700 font-medium hover:bg-sky-100"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          Y aller
+                        </a>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="text-xs text-slate-500">
+                  Aucun restaurant classable trouvé (scores Google / TripAdvisor / Restaurant Guru indisponibles dans ce rayon).
+                </p>
+              )}
+            </div>
+
             {/* Explication dynamique si le WeatherScore est impacté */}
             {(showWindExplanation || malusSoleil) && (
               <div className="mt-3 pt-3 border-t border-slate-100 space-y-1">
@@ -1364,6 +1557,17 @@ out tags center 120;`;
                           {previewData?.typeHint && <p><span className="font-semibold text-slate-700">Type:</span> {previewData.typeHint}</p>}
                           {previewData?.openingHours && <p><span className="font-semibold text-slate-700">Horaires:</span> {previewData.openingHours}</p>}
                           {previewData?.phone && <p><span className="font-semibold text-slate-700">Contact:</span> {previewData.phone}</p>}
+                        </div>
+                      )}
+                      {previewPoi.categoryKey === 'restaurant' && (
+                        <div className="rounded-xl bg-orange-50 border border-orange-200 p-3 space-y-1 text-xs text-orange-800">
+                          <p>
+                            <span className="font-semibold text-orange-900">Classement avis:</span>{' '}
+                            {previewData?.reviewScore100 != null ? `${Math.round(previewData.reviewScore100)}/100` : 'indisponible'}
+                          </p>
+                          {previewData?.reviewSourceBreakdown?.length > 0 && (
+                            <p className="text-[11px] leading-relaxed">{previewData.reviewSourceBreakdown.join(' • ')}</p>
+                          )}
                         </div>
                       )}
                       {previewError && (
