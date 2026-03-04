@@ -175,7 +175,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 19h03';
+    const APP_BUILD = '04/03/2026 - 19h07';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -1235,15 +1235,33 @@ out tags center 120;`;
           const dir = directionLabel(position.lat, position.lon, p.lat, p.lon);
           return `Spot ${dir} (${dist} km)`;
         };
+        const sanitizePlaceLabel = (value) => String(value || '').split(',')[0].replace(/\s+/g, ' ').trim();
+        const isGenericSpotLabel = (value) => {
+          const label = sanitizePlaceLabel(value);
+          return !label || /^spot\b/i.test(label) || /^zone\s+\d+\b/i.test(label);
+        };
+        const lookupNearestMunicipalityLabel = async (lat, lon) => {
+          const municipalityUrl = `https://api-adresse.data.gouv.fr/reverse/?lon=${lon}&lat=${lat}&type=municipality&limit=1`;
+          try {
+            const municipalityRes = await fetch(municipalityUrl, { signal });
+            if (!municipalityRes.ok) return '';
+            const municipalityData = await municipalityRes.json();
+            const municipalityProps = municipalityData?.features?.[0]?.properties || {};
+            return sanitizePlaceLabel(municipalityProps.city || municipalityProps.name || municipalityProps.label || '');
+          } catch (_) {
+            return '';
+          }
+        };
         const lookupOne = async (p, idx) => {
           const url = `https://api-adresse.data.gouv.fr/reverse/?lon=${p.lon}&lat=${p.lat}`;
           try {
+            let feat = null;
             const res = await fetch(url, { signal });
-            if (!res.ok) return null;
-            const data = await res.json();
-            const feat = data?.features?.[0];
+            if (res.ok) {
+              const data = await res.json();
+              feat = data?.features?.[0] || null;
+            }
             const props = feat?.properties || {};
-            const label = props.city || props.name || props.label || fallbackLabel(p, idx);
             const coords = feat?.geometry?.coordinates;
             let nextLat = p.lat;
             let nextLon = p.lon;
@@ -1258,6 +1276,12 @@ out tags center 120;`;
                 }
               }
             }
+            let label = sanitizePlaceLabel(props.city || props.name || props.label || '');
+            if (isGenericSpotLabel(label)) {
+              const nearestMunicipality = await lookupNearestMunicipalityLabel(nextLat, nextLon);
+              if (nearestMunicipality) label = nearestMunicipality;
+            }
+            if (!label) label = fallbackLabel(p, idx);
             return {
               ...p,
               lat: Number(nextLat.toFixed(5)),
