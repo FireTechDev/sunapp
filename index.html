@@ -187,7 +187,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 21h33';
+    const APP_BUILD = '04/03/2026 - 21h36';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -1610,7 +1610,7 @@ out tags center 120;`;
           )}
           {/* Photo principale + carrousel de la zone (strictement <= 10 km) */}
           <div className="p-3 pb-0">
-            <div className="card-visual rounded-xl aspect-[4/3] flex items-center justify-center overflow-hidden bg-slate-100 relative">
+            <div className="card-visual rounded-xl aspect-[16/11] flex items-center justify-center overflow-hidden bg-slate-100 relative">
               <div
                 className={`absolute bottom-2 left-2 z-10 px-2.5 py-1 rounded-lg text-sm font-medium shadow ${weatherScore.badgeClass || 'bg-black/70 text-white'}`}
                 title={weatherScore.desc}
@@ -2842,7 +2842,6 @@ out tags center 120;`;
               <IconSun className="text-amber-500" /> SunApp
             </h1>
             <div className="mt-3 bg-white border border-slate-100 rounded-2xl p-3 shadow-sm">
-              <p className="text-xs uppercase tracking-wide text-slate-500 font-semibold mb-2">Quand ?</p>
               <div className="grid grid-cols-3 gap-2">
                 {scopeTabs.map((tab) => {
                   const isActive = tab.key === timeScope;
@@ -2922,19 +2921,19 @@ out tags center 120;`;
             </div>
           )}
 
-          <div className="mb-4 bg-white rounded-2xl shadow-md border border-slate-100 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm text-slate-700">{geoBannerText}</p>
+          <div className="mb-3 bg-white rounded-xl border border-slate-100 px-3 py-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-slate-600">{geoBannerText}</p>
               <button
                 type="button"
                 onClick={requestUserGeolocation}
                 disabled={requestingGeo}
-                className="px-3 py-1.5 rounded-lg bg-sky-500 text-white text-sm font-medium hover:bg-sky-600 disabled:opacity-60"
+                className="px-2.5 py-1 rounded-md border border-slate-200 bg-slate-50 text-slate-600 text-xs font-medium hover:bg-slate-100 disabled:opacity-60"
               >
                 {requestingGeo ? 'Localisation…' : 'Utiliser ma position'}
               </button>
             </div>
-            <p className="text-xs text-slate-500 mt-2">
+            <p className="text-[11px] text-slate-500 mt-1.5">
               {isSecureGeoContext
                 ? 'Si le GPS est refusé, l’app continue avec une position de secours.'
                 : 'Sur Safari iOS, la géolocalisation fonctionne seulement sur HTTPS (ou localhost).'}
@@ -3039,7 +3038,7 @@ out tags center 120;`;
           <div className="bg-white rounded-2xl shadow-lg border border-slate-100 overflow-hidden">
             <div className="bg-[#36A7EB] text-white px-6 py-4 rounded-t-2xl">
               <h2 className="text-lg font-bold">
-                {isFallbackMode ? `Zones météo (${activeScopeInfo?.label || "Aujourd'hui"})` : `Zones météo près de ${locationTitle} • ${activeScopeInfo?.label || "Aujourd'hui"}`}
+                {isFallbackMode ? `Prévisions météo (${activeScopeInfo?.label || "Aujourd'hui"})` : `Prévisions météo près de ${locationTitle} • ${activeScopeInfo?.label || "Aujourd'hui"}`}
               </h2>
               <p className="text-sm text-white/90 mt-0.5">
                 {loading && position
