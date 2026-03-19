@@ -398,11 +398,11 @@
   }
 
   function getTrailObjectUrl(osmType, osmId, lat, lng) {
-    if (osmType && osmId) {
-      return 'https://www.openstreetmap.org/' + encodeURIComponent(osmType) + '/' + encodeURIComponent(osmId);
-    }
     if (lat != null && lng != null) {
       return 'https://www.openstreetmap.org/?mlat=' + encodeURIComponent(lat) + '&mlon=' + encodeURIComponent(lng) + '#map=14/' + encodeURIComponent(lat) + '/' + encodeURIComponent(lng);
+    }
+    if (osmType && osmId) {
+      return 'https://www.openstreetmap.org/' + encodeURIComponent(osmType) + '/' + encodeURIComponent(osmId);
     }
     return '';
   }
