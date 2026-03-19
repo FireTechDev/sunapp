@@ -5,7 +5,10 @@
   var CACHE_TTL_MS = 24 * 60 * 60 * 1000;
   var SEARCH_RADII_KM = [15, 30, 50];
   var PROVIDER_TIMEOUT_MS = 14000;
-  var MAX_CONCURRENT_REQUESTS = 2;
+  var MAX_CONCURRENT_REQUESTS = 1;
+  var REQUEST_GAP_MS = 1500;
+  var RATE_LIMIT_COOLDOWN_MS = 20 * 60 * 1000;
+  var OVERPASS_COOLDOWN_KEY = CACHE_PREFIX + 'overpass-cooldown-until';
   var OVERPASS_ENDPOINTS = [
     'https://overpass-api.de/api/interpreter',
     'https://lz4.overpass-api.de/api/interpreter',
@@ -15,6 +18,8 @@
   var memoryCache = new Map();
   var pendingQueue = [];
   var activeRequests = 0;
+  var lastRequestStartedAt = 0;
+  var endpointCursor = 0;
 
   function normalizeText(value) {
     return String(value || '')
@@ -218,6 +223,41 @@
     } catch (_) {}
   }
 
+  function sleep(ms) {
+    return new Promise(function (resolve) {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  function makeRateLimitError(status) {
+    var error = new Error('Overpass rate limited');
+    error.code = 'rate_limited';
+    error.status = status || 429;
+    return error;
+  }
+
+  function getOverpassCooldownUntil() {
+    var raw = 0;
+    try {
+      raw = Number(global.localStorage && global.localStorage.getItem(OVERPASS_COOLDOWN_KEY));
+    } catch (_) {
+      raw = 0;
+    }
+    return Number.isFinite(raw) ? raw : 0;
+  }
+
+  function setOverpassCooldownUntil(timestamp) {
+    var until = Number(timestamp) || 0;
+    try {
+      if (global.localStorage) global.localStorage.setItem(OVERPASS_COOLDOWN_KEY, String(until));
+    } catch (_) {}
+    return until;
+  }
+
+  function hasActiveOverpassCooldown() {
+    return getOverpassCooldownUntil() > Date.now();
+  }
+
   function getCachedTrails(cacheKey) {
     var key = makeCacheKey(cacheKey);
     var memoryEntry = memoryCache.get(key);
@@ -293,11 +333,25 @@
 
   function postOverpass(query, signal) {
     var lastError = null;
+    if (hasActiveOverpassCooldown()) {
+      return Promise.reject(makeRateLimitError(429));
+    }
     return enqueueRequest(function () {
-      var chain = Promise.resolve(null);
-      OVERPASS_ENDPOINTS.forEach(function (endpoint) {
+      var orderedEndpoints = OVERPASS_ENDPOINTS
+        .map(function (_, idx) {
+          return OVERPASS_ENDPOINTS[(endpointCursor + idx) % OVERPASS_ENDPOINTS.length];
+        });
+      endpointCursor = (endpointCursor + 1) % OVERPASS_ENDPOINTS.length;
+      var chain = Promise.resolve(null).then(function () {
+        var waitMs = Math.max(0, REQUEST_GAP_MS - (Date.now() - lastRequestStartedAt));
+        if (waitMs <= 0) return null;
+        return sleep(waitMs);
+      });
+      orderedEndpoints.forEach(function (endpoint) {
         chain = chain.then(function (payload) {
           if (payload) return payload;
+          if (hasActiveOverpassCooldown()) throw makeRateLimitError(429);
+          lastRequestStartedAt = Date.now();
           return fetchWithTimeout(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
@@ -305,12 +359,17 @@
             signal: signal
           }, PROVIDER_TIMEOUT_MS).then(function (response) {
             if (!response.ok) {
+              if (response.status === 429) {
+                setOverpassCooldownUntil(Date.now() + RATE_LIMIT_COOLDOWN_MS);
+                throw makeRateLimitError(429);
+              }
               var error = new Error('HTTP ' + response.status);
               error.status = response.status;
               throw error;
             }
             return response.json();
           }).catch(function (error) {
+            if (error && error.code === 'rate_limited') throw error;
             lastError = error;
             return null;
           });
@@ -614,11 +673,12 @@
         ? fetchBikeTrailsFromUtagawaCompatibleSource
         : fetchHikesFromSimpleProvider;
       var hadSuccessfulResponse = false;
+      var shouldStopSearch = false;
 
       var sequence = Promise.resolve(null);
       SEARCH_RADII_KM.forEach(function (radiusKm) {
         sequence = sequence.then(function (result) {
-          if (result) return result;
+          if (result || shouldStopSearch) return result;
           return provider(placeWithCoords, radiusKm, signal)
             .then(function (trails) {
               hadSuccessfulResponse = true;
@@ -626,7 +686,8 @@
               if (ranked.length === 0) return null;
               return createSectionResult('ready', ranked, radiusKm);
             })
-            .catch(function () {
+            .catch(function (error) {
+              if (error && error.code === 'rate_limited') shouldStopSearch = true;
               return null;
             });
         });
@@ -642,7 +703,9 @@
           setCachedTrails(topCacheKey, empty);
           return empty;
         }
-        return createSectionResult('error', [], null);
+        var errorResult = createSectionResult('error', [], null);
+        setCachedTrails(topCacheKey, errorResult, 15 * 60 * 1000);
+        return errorResult;
       });
     });
   }
@@ -658,6 +721,8 @@
   global.SunAppOutdoor = {
     fetchBikeTrailsForPlace: fetchBikeTrailsForPlace,
     fetchHikesForPlace: fetchHikesForPlace,
+    fetchOverpassJson: postOverpass,
+    hasActiveOverpassCooldown: hasActiveOverpassCooldown,
     getTopTrails: getTopTrails,
     rankTrails: rankTrails,
     getCachedTrails: getCachedTrails,

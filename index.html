@@ -197,7 +197,7 @@
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const OutdoorAPI = window.SunAppOutdoor || null;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '19/03/2026 - 15h51';
+    const APP_BUILD = '19/03/2026 - 16h11';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -861,14 +861,19 @@
   nwr(around:${POI_SEARCH_RADIUS_M},${lat},${lon})["natural"~"beach|peak|water|wood|cliff"];
 );
 out tags center 120;`;
-      const res = await fetch('https://overpass-api.de/api/interpreter', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-        body: new URLSearchParams({ data: query }),
-        signal,
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const payload = await res.json();
+      let payload = null;
+      if (OutdoorAPI?.fetchOverpassJson) {
+        payload = await OutdoorAPI.fetchOverpassJson(query, signal);
+      } else {
+        const res = await fetch('https://overpass-api.de/api/interpreter', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+          body: new URLSearchParams({ data: query }),
+          signal,
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        payload = await res.json();
+      }
       const elements = Array.isArray(payload?.elements) ? payload.elements : [];
       const seen = new Set();
       const pois = [];
@@ -1494,6 +1499,7 @@ out tags center 120;`;
       const [photoIndex, setPhotoIndex] = useState(0);
       const [poiRaw, setPoiRaw] = useState([]);
       const [poiLoading, setPoiLoading] = useState(false);
+      const [poiError, setPoiError] = useState('');
       const [shouldLoadPoi, setShouldLoadPoi] = useState(false);
       const [bikeTrailsState, setBikeTrailsState] = useState(() => getOutdoorSectionBaseState());
       const [hikingTrailsState, setHikingTrailsState] = useState(() => getOutdoorSectionBaseState());
@@ -1516,7 +1522,7 @@ out tags center 120;`;
               observer.disconnect();
             }
           },
-          { rootMargin: '280px 0px' }
+          { rootMargin: '120px 0px' }
         );
         observer.observe(node);
         return () => observer.disconnect();
@@ -1563,12 +1569,14 @@ out tags center 120;`;
         if (cached) {
           setPoiRaw(cached);
           setPoiLoading(false);
+          setPoiError('');
           return () => {
             cancelled = true;
             abortController.abort();
           };
         }
         setPoiLoading(true);
+        setPoiError('');
         (async () => {
           try {
             const pois = await fetchZonePoiIdeas(city.lat, city.lon, abortController.signal);
@@ -1578,6 +1586,7 @@ out tags center 120;`;
           } catch (err) {
             if (cancelled || err?.name === 'AbortError') return;
             setPoiRaw([]);
+            setPoiError('Les lieux à proximité ne peuvent pas être chargés pour le moment.');
           } finally {
             if (!cancelled) setPoiLoading(false);
           }
@@ -1902,6 +1911,8 @@ out tags center 120;`;
               </div>
               {poiLoading ? (
                 <p className="text-xs text-slate-500">Recherche de lieux proches...</p>
+              ) : poiError ? (
+                <p className="text-xs text-slate-500">{poiError}</p>
               ) : poiIdeas.length > 0 ? (
                 <ul className="space-y-1.5 text-slate-600 text-sm">
                   {poiIdeas.map((poi, idx) => (
@@ -1963,6 +1974,8 @@ out tags center 120;`;
               </div>
               {poiLoading ? (
                 <p className="text-xs text-slate-500">Classement des restaurants...</p>
+              ) : poiError ? (
+                <p className="text-xs text-slate-500">{poiError}</p>
               ) : restaurantIdeas.length > 0 ? (
                 <ol className="space-y-1.5 text-slate-600 text-sm">
                   {restaurantIdeas.map((restaurant, idx) => (
