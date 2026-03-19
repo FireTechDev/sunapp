@@ -8,6 +8,7 @@
   var MAX_CONCURRENT_REQUESTS = 1;
   var REQUEST_GAP_MS = 1500;
   var RATE_LIMIT_COOLDOWN_MS = 20 * 60 * 1000;
+  var PLACE_BUCKET_STEP = 0.04;
   var OVERPASS_COOLDOWN_KEY = CACHE_PREFIX + 'overpass-cooldown-until';
   var OVERPASS_ENDPOINTS = [
     'https://overpass-api.de/api/interpreter',
@@ -20,6 +21,7 @@
   var activeRequests = 0;
   var lastRequestStartedAt = 0;
   var endpointCursor = 0;
+  var rawBucketPromiseCache = new Map();
 
   function normalizeText(value) {
     return String(value || '')
@@ -56,6 +58,19 @@
   function roundCoord(value) {
     var n = safeNumber(value);
     return n == null ? null : Number(n.toFixed(5));
+  }
+
+  function bucketCoord(value, step) {
+    var n = safeNumber(value);
+    if (n == null) return null;
+    var size = safeNumber(step) || PLACE_BUCKET_STEP;
+    return Number((Math.round(n / size) * size).toFixed(3));
+  }
+
+  function getPlaceBucketKey(place, step) {
+    var lat = bucketCoord(place && place.lat, step);
+    var lng = bucketCoord(place && (place.lon != null ? place.lon : place.lng), step);
+    return lat == null || lng == null ? 'unknown' : (lat + ',' + lng);
   }
 
   function clamp(value, min, max) {
@@ -408,6 +423,21 @@
     return compactText(parts.join(' • '), 120);
   }
 
+  function inferActivityType(tags) {
+    var routeType = normalizeText(tags && tags.route);
+    var labelText = normalizeText([
+      tags && tags.name,
+      tags && tags.ref,
+      tags && tags.network
+    ].filter(Boolean).join(' '));
+    if (routeType === 'mtb') return 'vtt';
+    if (routeType === 'bicycle' && (String(tags && tags['mtb:scale'] || '').trim() || /\b(vtt|mtb|mountain bike)\b/.test(labelText))) {
+      return 'vtt';
+    }
+    if (/^(hiking|foot|walking)$/.test(routeType)) return 'rando';
+    return '';
+  }
+
   function mapOverpassElementToTrail(element, activityType, placeLat, placeLng, sourceLabel) {
     var tags = element && element.tags ? element.tags : {};
     var lat = roundCoord(element && (element.lat != null ? element.lat : element.center && element.center.lat));
@@ -517,11 +547,20 @@
     var filtered = (Array.isArray(trails) ? trails : [])
       .filter(function (trail) {
         if (!trail || !trail.title) return false;
-        if (trail.fromPlaceKm == null) return true;
-        return trail.fromPlaceKm <= Math.max(55, radiusKm * 1.35);
+        var fromPlaceKm = trail.fromPlaceKm;
+        if (place && trail.lat != null && trail.lng != null) {
+          fromPlaceKm = haversineKm(place.lat, place.lng, trail.lat, trail.lng);
+        }
+        if (fromPlaceKm == null) return true;
+        return fromPlaceKm <= Math.max(55, radiusKm * 1.35);
       })
       .map(function (trail) {
-        var proximity = trail.fromPlaceKm == null ? 25 : clamp(100 - (trail.fromPlaceKm * 6), 0, 100);
+        var fromPlaceKm = trail.fromPlaceKm;
+        if (place && trail.lat != null && trail.lng != null) {
+          fromPlaceKm = haversineKm(place.lat, place.lng, trail.lat, trail.lng);
+        }
+        var normalizedDistance = fromPlaceKm == null ? null : Number(fromPlaceKm.toFixed(1));
+        var proximity = normalizedDistance == null ? 25 : clamp(100 - (normalizedDistance * 6), 0, 100);
         var richness = getMetadataRichness(trail);
         var popularity = getPopularityScore(trail);
         var freshness = getFreshnessScore(trail);
@@ -533,6 +572,7 @@
           (freshness * 0.10) +
           (summaryBonus * 0.10);
         return Object.assign({}, trail, {
+          fromPlaceKm: normalizedDistance,
           _trailScore: Math.round(score * 10) / 10
         });
       })
@@ -543,54 +583,63 @@
     return dedupeTrails(filtered);
   }
 
-  function buildSearchQuery(place, activityType, radiusKm) {
+  function buildCombinedSearchQuery(place, radiusKm) {
     var radiusM = Math.round(radiusKm * 1000);
     var lat = place.lat;
     var lng = place.lng;
-    if (activityType === 'vtt') {
-      return '[out:json][timeout:18];(' +
-        'rel(around:' + radiusM + ',' + lat + ',' + lng + ')["type"="route"]["route"="mtb"]["name"];' +
-        'rel(around:' + radiusM + ',' + lat + ',' + lng + ')["type"="route"]["route"="bicycle"]["mtb:scale"]["name"];' +
-        'rel(around:' + radiusM + ',' + lat + ',' + lng + ')["type"="route"]["route"="bicycle"]["name"~"vtt|mtb|mountain bike",i];' +
-        ');out tags center 80;';
-    }
     return '[out:json][timeout:18];(' +
+      'rel(around:' + radiusM + ',' + lat + ',' + lng + ')["type"="route"]["route"="mtb"]["name"];' +
+      'rel(around:' + radiusM + ',' + lat + ',' + lng + ')["type"="route"]["route"="bicycle"]["mtb:scale"]["name"];' +
+      'rel(around:' + radiusM + ',' + lat + ',' + lng + ')["type"="route"]["route"="bicycle"]["name"~"vtt|mtb|mountain bike",i];' +
       'rel(around:' + radiusM + ',' + lat + ',' + lng + ')["type"="route"]["route"~"hiking|foot|walking"]["name"];' +
       ');out tags center 80;';
   }
 
-  function fetchTrailsFromOverpass(place, activityType, radiusKm, signal) {
+  function fetchGroupedTrailsFromOverpass(place, signal) {
+    var bucketKey = getPlaceBucketKey(place, PLACE_BUCKET_STEP);
     var cacheKey = [
-      'raw',
-      activityType,
-      place.lat.toFixed(4),
-      place.lng.toFixed(4),
-      radiusKm
+      'raw-grouped',
+      bucketKey,
+      SEARCH_RADII_KM[SEARCH_RADII_KM.length - 1]
     ].join(':');
     var cached = getCachedTrails(cacheKey);
     if (cached) return Promise.resolve(cached);
+    var pending = rawBucketPromiseCache.get(cacheKey);
+    if (pending) return pending;
 
-    var query = buildSearchQuery(place, activityType, radiusKm);
-    return postOverpass(query, signal).then(function (payload) {
+    var query = buildCombinedSearchQuery(place, SEARCH_RADII_KM[SEARCH_RADII_KM.length - 1]);
+    var request = postOverpass(query, signal).then(function (payload) {
       var elements = Array.isArray(payload && payload.elements) ? payload.elements : [];
       var trails = elements
         .map(function (element) {
-          return mapOverpassElementToTrail(element, activityType, place.lat, place.lng, 'OpenStreetMap');
+          var inferredType = inferActivityType(element && element.tags ? element.tags : {});
+          if (!inferredType) return null;
+          return mapOverpassElementToTrail(element, inferredType, place.lat, place.lng, 'OpenStreetMap');
         })
         .filter(Boolean);
       setCachedTrails(cacheKey, trails);
+      rawBucketPromiseCache.delete(cacheKey);
       return trails;
+    }).catch(function (error) {
+      rawBucketPromiseCache.delete(cacheKey);
+      throw error;
     });
+    rawBucketPromiseCache.set(cacheKey, request);
+    return request;
   }
 
   function fetchBikeTrailsFromUtagawaCompatibleSource(place, radiusKm, signal) {
     // Provider kept isolated on purpose: if a public UtagawaVTT endpoint is added later,
     // only this function needs to change.
-    return fetchTrailsFromOverpass(place, 'vtt', radiusKm, signal);
+    return fetchGroupedTrailsFromOverpass(place, signal).then(function (trails) {
+      return trails.filter(function (trail) { return trail.type === 'vtt'; });
+    });
   }
 
   function fetchHikesFromSimpleProvider(place, radiusKm, signal) {
-    return fetchTrailsFromOverpass(place, 'rando', radiusKm, signal);
+    return fetchGroupedTrailsFromOverpass(place, signal).then(function (trails) {
+      return trails.filter(function (trail) { return trail.type === 'rando'; });
+    });
   }
 
   function resolvePlaceCoordinates(place, signal) {

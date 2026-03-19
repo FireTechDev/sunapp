@@ -197,7 +197,7 @@
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const OutdoorAPI = window.SunAppOutdoor || null;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '19/03/2026 - 16h11';
+    const APP_BUILD = '19/03/2026 - 16h27';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -576,20 +576,28 @@
     const MAX_CARD_RESTAURANTS = 3;
     const POI_SEARCH_RADIUS_M = 15000;
     const POI_WIKI_RADIUS_M = 4000;
+    const CARD_CACHE_BUCKET_STEP = 0.03;
     const CARD_PHOTO_CACHE = new Map();
     const CARD_POI_CACHE = new Map();
+    const CARD_POI_REQUESTS = new Map();
     const CARD_POI_PREVIEW_CACHE = new Map();
     const NON_SCENIC_TITLE_HINTS = /\b(map|carte|plan|logo|flag|drapeau|blason|coat[_ -]?of[_ -]?arms|symbol|diagram|locator|location map|svg|liste de|chronologie|histoire de)\b/i;
     const PERSON_DESCRIPTION_HINTS = /\b(acteur|actrice|chanteur|chanteuse|joueur|joueuse|footballeur|rugbyman|cycliste|peintre|écrivain|politique|député|maire|avocat|journaliste|personnalité|biographie|né en|née en|mort en|morte en|human)\b/i;
     const PLACE_DESCRIPTION_HINTS = /\b(commune|village|hameau|quartier|eglise|chateau|mont|lac|riviere|foret|parc|plage|vallee|reserve|gorges|site naturel|monument|abbaye|cathedrale|basilique|musee|pont|canal|place)\b/i;
     const PLACE_TOKEN_STOPWORDS = new Set(['de', 'du', 'des', 'la', 'le', 'les', 'sur', 'sous', 'saint', 'sainte', 'l', 'd']);
 
+    function getCacheBucketCoord(value, step = CARD_CACHE_BUCKET_STEP) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return null;
+      return Number((Math.round(n / step) * step).toFixed(3));
+    }
+
     function getCardPhotoCacheKey(lat, lon) {
       return `${Number(lat).toFixed(4)},${Number(lon).toFixed(4)}`;
     }
 
     function getCardPoiCacheKey(lat, lon) {
-      return `poi:${Number(lat).toFixed(4)},${Number(lon).toFixed(4)}`;
+      return `poi:${getCacheBucketCoord(lat)},${getCacheBucketCoord(lon)}`;
     }
 
     function getPoiPreviewCacheKey(poi) {
@@ -1563,7 +1571,6 @@ out tags center 120;`;
       useEffect(() => {
         if (!shouldLoadPoi) return;
         let cancelled = false;
-        const abortController = new AbortController();
         const cacheKey = getCardPoiCacheKey(city.lat, city.lon);
         const cached = CARD_POI_CACHE.get(cacheKey);
         if (cached) {
@@ -1572,28 +1579,47 @@ out tags center 120;`;
           setPoiError('');
           return () => {
             cancelled = true;
-            abortController.abort();
+          };
+        }
+        const pending = CARD_POI_REQUESTS.get(cacheKey);
+        if (pending) {
+          setPoiLoading(true);
+          setPoiError('');
+          pending.then((pois) => {
+            if (cancelled) return;
+            setPoiRaw(pois);
+            setPoiError('');
+            setPoiLoading(false);
+          }).catch((err) => {
+            if (cancelled || err?.name === 'AbortError') return;
+            setPoiRaw([]);
+            setPoiError('Les lieux à proximité ne peuvent pas être chargés pour le moment.');
+            setPoiLoading(false);
+          });
+          return () => {
+            cancelled = true;
           };
         }
         setPoiLoading(true);
         setPoiError('');
-        (async () => {
-          try {
-            const pois = await fetchZonePoiIdeas(city.lat, city.lon, abortController.signal);
-            if (cancelled) return;
-            CARD_POI_CACHE.set(cacheKey, pois);
-            setPoiRaw(pois);
-          } catch (err) {
-            if (cancelled || err?.name === 'AbortError') return;
-            setPoiRaw([]);
-            setPoiError('Les lieux à proximité ne peuvent pas être chargés pour le moment.');
-          } finally {
-            if (!cancelled) setPoiLoading(false);
-          }
-        })();
+        const request = fetchZonePoiIdeas(city.lat, city.lon);
+        CARD_POI_REQUESTS.set(cacheKey, request);
+        request.then((pois) => {
+          CARD_POI_REQUESTS.delete(cacheKey);
+          CARD_POI_CACHE.set(cacheKey, pois);
+          if (cancelled) return;
+          setPoiRaw(pois);
+          setPoiError('');
+          setPoiLoading(false);
+        }).catch((err) => {
+          CARD_POI_REQUESTS.delete(cacheKey);
+          if (cancelled || err?.name === 'AbortError') return;
+          setPoiRaw([]);
+          setPoiError('Les lieux à proximité ne peuvent pas être chargés pour le moment.');
+          setPoiLoading(false);
+        });
         return () => {
           cancelled = true;
-          abortController.abort();
         };
       }, [shouldLoadPoi, city.lat, city.lon]);
 
