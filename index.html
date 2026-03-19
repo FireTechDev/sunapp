@@ -187,7 +187,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '04/03/2026 - 22h10';
+    const APP_BUILD = '19/03/2026 - 15h25';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -320,7 +320,7 @@
     ];
     const WEATHER_FILTER_LEVELS = [
       { value: 0, label: '🌦️ Tout temps' },
-      { value: 1, label: '💩 Médiocre' },
+      { value: 1, label: '🌧️ Médiocre' },
       { value: 2, label: '☁️ Passable' },
       { value: 3, label: '🌤️ Agréable' },
       { value: 4, label: '☀️ Parfait' },
@@ -434,6 +434,11 @@
     }
     function getWeatherFilterLabel(level) {
       return WEATHER_FILTER_LEVELS.find((item) => item.value === level)?.label || '🌦️ Tout temps';
+    }
+    function getWeatherFilterSummaryLabel(level) {
+      if (level <= 0) return getWeatherFilterLabel(0);
+      if (level === 1) return '🌧️ À partir de médiocre';
+      return `${getWeatherFilterLabel(level)} ou mieux`;
     }
     function getWeatherScore(city) {
       const code = city.weather_code ?? 99;
@@ -2918,9 +2923,7 @@ out tags center 120;`;
         mapInstanceRef.current.setView([selectedCity.lat, selectedCity.lon], 10);
       }, [selectedCity]);
 
-      const weatherLevelLabel = minWeatherLevel > 0
-        ? `${getWeatherFilterLabel(minWeatherLevel)} ou mieux`
-        : getWeatherFilterLabel(0);
+      const weatherLevelLabel = getWeatherFilterSummaryLabel(minWeatherLevel);
 
       const isSecureGeoContext = window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
       const geoBannerText = positionSource === 'geo'
