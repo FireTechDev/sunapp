@@ -1,7 +1,7 @@
 (function (global) {
   'use strict';
 
-  var CACHE_PREFIX = 'sunapp:outdoor:v1:';
+  var CACHE_PREFIX = 'sunapp:outdoor:v2:';
   var CACHE_TTL_MS = 24 * 60 * 60 * 1000;
   var SEARCH_RADII_KM = [15, 30, 50];
   var PROVIDER_TIMEOUT_MS = 14000;
@@ -22,6 +22,23 @@
   var lastRequestStartedAt = 0;
   var endpointCursor = 0;
   var rawBucketPromiseCache = new Map();
+
+  function purgeLegacyOutdoorCache() {
+    try {
+      if (!global.localStorage) return;
+      var keysToDelete = [];
+      for (var i = 0; i < global.localStorage.length; i += 1) {
+        var key = global.localStorage.key(i);
+        if (!key) continue;
+        if (key.indexOf('sunapp:outdoor:v1:') === 0) keysToDelete.push(key);
+      }
+      keysToDelete.forEach(function (key) {
+        global.localStorage.removeItem(key);
+      });
+    } catch (_) {}
+  }
+
+  purgeLegacyOutdoorCache();
 
   function normalizeText(value) {
     return String(value || '')
