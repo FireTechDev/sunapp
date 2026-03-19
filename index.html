@@ -38,6 +38,7 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <!-- Babel pour JSX dans le navigateur (choix volontaire pour fichier unique sans build) -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="./outdoor.js"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
     body { font-family: 'Outfit', sans-serif; }
@@ -194,8 +195,9 @@
 
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
+    const OutdoorAPI = window.SunAppOutdoor || null;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '19/03/2026 - 15h34';
+    const APP_BUILD = '19/03/2026 - 15h51';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -1399,6 +1401,93 @@ out tags center 120;`;
       );
     }
 
+    function getOutdoorSectionBaseState() {
+      return { status: 'idle', trails: [], radiusKm: null };
+    }
+
+    function getOutdoorEmptyMessage(type) {
+      return type === 'vtt'
+        ? 'Aucun circuit VTT recommandé trouvé à proximité de ce lieu.'
+        : 'Aucune randonnée recommandée trouvée à proximité de ce lieu.';
+    }
+
+    function getOutdoorErrorMessage(type) {
+      return type === 'vtt'
+        ? 'Les circuits ne peuvent pas être chargés pour le moment.'
+        : 'Les randonnées ne peuvent pas être chargées pour le moment.';
+    }
+
+    function getOutdoorLoadingMessage(type) {
+      return type === 'vtt'
+        ? 'Recherche de circuits VTT...'
+        : 'Recherche de randonnées...';
+    }
+
+    function formatOutdoorMeta(trail) {
+      const parts = [];
+      if (trail?.distanceKm != null) parts.push(`${Math.round(Number(trail.distanceKm))} km`);
+      if (trail?.duration) parts.push(trail.duration);
+      if (trail?.elevationGain != null) parts.push(`D+ ${Math.round(Number(trail.elevationGain))} m`);
+      if (trail?.difficulty) parts.push(String(trail.difficulty));
+      if (trail?.fromPlaceKm != null) parts.push(`à ${Number(trail.fromPlaceKm).toFixed(1)} km`);
+      return parts.join(' • ');
+    }
+
+    function OutdoorTrailSection({ title, icon, type, state }) {
+      const sectionState = state || getOutdoorSectionBaseState();
+      const linkLabel = type === 'vtt' ? 'Voir le circuit' : 'Voir la randonnée';
+      return (
+        <div className="mt-4 pt-3 border-t border-slate-100">
+          <div className={`flex items-center gap-2 font-medium text-sm mb-2 ${type === 'vtt' ? 'text-emerald-700' : 'text-lime-700'}`}>
+            <span className="text-base leading-none" aria-hidden="true">{icon}</span>
+            {title}
+          </div>
+          {sectionState.status === 'loading' && (
+            <p className="text-xs text-slate-500 animate-pulse">{getOutdoorLoadingMessage(type)}</p>
+          )}
+          {sectionState.status === 'unlocatable' && (
+            <p className="text-xs text-slate-500">Impossible de localiser précisément ce lieu pour proposer des circuits à proximité.</p>
+          )}
+          {sectionState.status === 'error' && (
+            <p className="text-xs text-slate-500">{getOutdoorErrorMessage(type)}</p>
+          )}
+          {sectionState.status === 'empty' && (
+            <p className="text-xs text-slate-500">{getOutdoorEmptyMessage(type)}</p>
+          )}
+          {sectionState.status === 'ready' && sectionState.trails.length > 0 && (
+            <ol className="space-y-2 text-slate-600 text-sm">
+              {sectionState.trails.map((trail, idx) => (
+                <li key={`${trail.id || trail.title}-${idx}`} className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium text-slate-700" title={trail.title}>
+                      {idx + 1}. {trail.title}
+                    </p>
+                    {formatOutdoorMeta(trail) && (
+                      <p className="text-[11px] text-slate-500">{formatOutdoorMeta(trail)}</p>
+                    )}
+                    {trail?.source && (
+                      <p className="text-[11px] text-slate-400">Source : {trail.source}</p>
+                    )}
+                  </div>
+                  {trail?.url ? (
+                    <a
+                      href={trail.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="shrink-0 text-[11px] px-2 py-1 rounded-md bg-sky-50 text-sky-700 font-medium hover:bg-sky-100"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {linkLabel}
+                    </a>
+                  ) : null}
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      );
+    }
+
     function CityCard({ city, userLat, userLon, onShowOnMap, isRecommended, rank, cardId }) {
       const cardRef = useRef(null);
       const [photoSlides, setPhotoSlides] = useState([]);
@@ -1406,6 +1495,8 @@ out tags center 120;`;
       const [poiRaw, setPoiRaw] = useState([]);
       const [poiLoading, setPoiLoading] = useState(false);
       const [shouldLoadPoi, setShouldLoadPoi] = useState(false);
+      const [bikeTrailsState, setBikeTrailsState] = useState(() => getOutdoorSectionBaseState());
+      const [hikingTrailsState, setHikingTrailsState] = useState(() => getOutdoorSectionBaseState());
       const [previewPoi, setPreviewPoi] = useState(null);
       const [previewData, setPreviewData] = useState(null);
       const [previewLoading, setPreviewLoading] = useState(false);
@@ -1534,6 +1625,42 @@ out tags center 120;`;
           abortController.abort();
         };
       }, [previewPoi]);
+
+      useEffect(() => {
+        if (!shouldLoadPoi) return;
+        if (!OutdoorAPI) {
+          setBikeTrailsState({ status: 'error', trails: [], radiusKm: null });
+          setHikingTrailsState({ status: 'error', trails: [], radiusKm: null });
+          return;
+        }
+        let cancelled = false;
+        const abortController = new AbortController();
+        const place = { name: city.name, lat: city.lat, lon: city.lon };
+        setBikeTrailsState((prev) => (prev.status === 'ready' ? prev : { status: 'loading', trails: [], radiusKm: null }));
+        setHikingTrailsState((prev) => (prev.status === 'ready' ? prev : { status: 'loading', trails: [], radiusKm: null }));
+        Promise.allSettled([
+          OutdoorAPI.fetchBikeTrailsForPlace(place, abortController.signal),
+          OutdoorAPI.fetchHikesForPlace(place, abortController.signal),
+        ]).then((results) => {
+          if (cancelled) return;
+          const bikeResult = results[0]?.status === 'fulfilled'
+            ? results[0].value
+            : { status: 'error', trails: [], radiusKm: null };
+          const hikingResult = results[1]?.status === 'fulfilled'
+            ? results[1].value
+            : { status: 'error', trails: [], radiusKm: null };
+          setBikeTrailsState(bikeResult || { status: 'error', trails: [], radiusKm: null });
+          setHikingTrailsState(hikingResult || { status: 'error', trails: [], radiusKm: null });
+        }).catch(() => {
+          if (cancelled) return;
+          setBikeTrailsState({ status: 'error', trails: [], radiusKm: null });
+          setHikingTrailsState({ status: 'error', trails: [], radiusKm: null });
+        });
+        return () => {
+          cancelled = true;
+          abortController.abort();
+        };
+      }, [shouldLoadPoi, city.name, city.lat, city.lon]);
 
       useEffect(() => {
         if (!previewPoi) return;
@@ -1814,6 +1941,20 @@ out tags center 120;`;
                 </p>
               )}
             </div>
+
+            <OutdoorTrailSection
+              title="Top 3 circuits VTT à proximité"
+              icon="🚵"
+              type="vtt"
+              state={bikeTrailsState}
+            />
+
+            <OutdoorTrailSection
+              title="Top 3 randonnées à proximité"
+              icon="🥾"
+              type="rando"
+              state={hikingTrailsState}
+            />
 
             <div className="mt-4 pt-3 border-t border-slate-100">
               <div className="flex items-center gap-2 text-orange-600 font-medium text-sm mb-2">

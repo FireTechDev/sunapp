@@ -10,6 +10,7 @@ const PRECACHE_URLS = [
   './offline.html',
   './manifest.webmanifest',
   './version.json',
+  './outdoor.js',
   './places.js',
   './places.json',
   './public/icons/icon-192.svg',
