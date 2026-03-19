@@ -397,12 +397,9 @@
     });
   }
 
-  function getWaymarkedUrl(activityType, osmType, osmId, lat, lng) {
-    if (osmType === 'relation' && osmId) {
-      if (activityType === 'vtt') {
-        return 'https://cycling.waymarkedtrails.org/#route?id=' + encodeURIComponent(osmId);
-      }
-      return 'https://hiking.waymarkedtrails.org/#route?id=' + encodeURIComponent(osmId);
+  function getTrailObjectUrl(osmType, osmId, lat, lng) {
+    if (osmType && osmId) {
+      return 'https://www.openstreetmap.org/' + encodeURIComponent(osmType) + '/' + encodeURIComponent(osmId);
     }
     if (lat != null && lng != null) {
       return 'https://www.openstreetmap.org/?mlat=' + encodeURIComponent(lat) + '&mlon=' + encodeURIComponent(lng) + '#map=14/' + encodeURIComponent(lat) + '/' + encodeURIComponent(lng);
@@ -472,9 +469,11 @@
       ].join(':'),
       title: title,
       type: activityType,
-      url: normalizeUrl(pickTag(tags, ['website', 'url'])) || getWaymarkedUrl(activityType, element.type, element.id, lat, lng),
+      url: normalizeUrl(pickTag(tags, ['website', 'url'])) || getTrailObjectUrl(element.type, element.id, lat, lng),
       lat: lat,
       lng: lng,
+      osmType: element.type || '',
+      osmId: element.id || null,
       distanceKm: distanceKm,
       durationMin: durationMin,
       duration: formatDuration(durationMin),
