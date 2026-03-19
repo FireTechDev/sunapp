@@ -107,9 +107,10 @@
       appearance: none;
       display: block;
       width: 100%;
-      height: 28px;
+      height: 34px;
       box-sizing: border-box;
-      padding: 10px 0;
+      padding: 12px 0;
+      border: 0;
       border-radius: 9999px;
       background: #334155;
       background-clip: content-box;
@@ -117,21 +118,22 @@
     }
     .range-slider::-webkit-slider-thumb {
       -webkit-appearance: none;
-      width: 22px;
-      height: 22px;
+      width: 26px;
+      height: 26px;
       border-radius: 50%;
       background: linear-gradient(135deg, #36A7EB, #0ea5e9);
+      border: 3px solid #ffffff;
       cursor: pointer;
-      box-shadow: 0 0 0 3px rgba(54, 167, 235, 0.3);
+      box-shadow: 0 6px 14px rgba(14, 165, 233, 0.28);
     }
     .range-slider::-moz-range-thumb {
-      width: 22px;
-      height: 22px;
+      width: 26px;
+      height: 26px;
       border-radius: 50%;
       background: linear-gradient(135deg, #36A7EB, #0ea5e9);
       cursor: pointer;
-      border: none;
-      box-shadow: 0 0 0 3px rgba(54, 167, 235, 0.3);
+      border: 3px solid #ffffff;
+      box-shadow: 0 6px 14px rgba(14, 165, 233, 0.28);
     }
     .sunapp-map-badge.leaflet-tooltip {
       background: rgba(15, 23, 42, 0.92);
@@ -193,7 +195,7 @@
   <script type="text/babel" data-type="module">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
     const APP_VERSION = '0.04';
-    const APP_BUILD = '19/03/2026 - 15h31';
+    const APP_BUILD = '19/03/2026 - 15h34';
     const PWA_VERSION_ENDPOINT = './version.json';
     const PWA_SW_URL = `./sw.js?v=${encodeURIComponent(`${APP_VERSION}-${APP_BUILD}`)}`;
     const PWA_VERSION_CHECK_INTERVAL_MS = 10 * 60 * 1000;
@@ -3136,27 +3138,25 @@ out tags center 120;`;
                 <span>60 km/h</span>
               </div>
               <label className="block text-sm font-medium text-slate-700 mt-4 mb-2">Météo : {weatherLevelLabel}</label>
-              <input
-                type="range"
-                min="0"
-                max={WEATHER_FILTER_LEVELS.length - 1}
-                step="1"
-                value={minWeatherLevel}
-                onChange={(e) => setMinWeatherLevel(Number(e.target.value))}
-                className="range-slider rounded-full appearance-none cursor-pointer"
-                style={{ background: `linear-gradient(to right, #36A7EB 0%, #36A7EB ${(minWeatherLevel / (WEATHER_FILTER_LEVELS.length - 1)) * 100}%, #e2e8f0 ${(minWeatherLevel / (WEATHER_FILTER_LEVELS.length - 1)) * 100}%, #e2e8f0 100%)` }}
-              />
               <div
-                className="grid gap-1 text-[10px] text-slate-500 mt-1 pointer-events-none select-none"
-                style={{ gridTemplateColumns: `repeat(${WEATHER_FILTER_LEVELS.length}, minmax(0, 1fr))` }}
+                className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-1"
+                role="group"
+                aria-label="Filtre météo"
               >
-                {WEATHER_FILTER_LEVELS.map((level, idx) => (
-                  <span
+                {WEATHER_FILTER_LEVELS.map((level) => (
+                  <button
+                    type="button"
                     key={level.value}
-                    className={idx === 0 ? 'text-left' : idx === WEATHER_FILTER_LEVELS.length - 1 ? 'text-right' : 'text-center'}
+                    onClick={() => setMinWeatherLevel(level.value)}
+                    className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+                      minWeatherLevel === level.value
+                        ? 'border-sky-400 bg-sky-50 text-sky-700 shadow-sm'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+                    } text-center`}
+                    aria-pressed={minWeatherLevel === level.value}
                   >
                     {level.label}
-                  </span>
+                  </button>
                 ))}
               </div>
               <button
